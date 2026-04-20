@@ -49,6 +49,16 @@ pub fn callback(attr: TokenStream, item: TokenStream) -> TokenStream {
     translate(item, |body| callback_inner(TokenStream2::from(attr), body))
 }
 
+#[proc_macro_attribute]
+pub fn hook(attr: TokenStream, item: TokenStream) -> TokenStream {
+    translate(item, |body| hook_inner(TokenStream2::from(attr), body))
+}
+
+#[proc_macro_attribute]
+pub fn from_offset(attr: TokenStream, item: TokenStream) -> TokenStream {
+    translate(item, |body| from_offset_inner(TokenStream2::from(attr), body))
+}
+
 fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream2> {
     let class = match item {
         venial::Item::Struct(class) => class,
@@ -582,6 +592,184 @@ fn callback_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
     })
 }
 
+struct IlHookArgs {
+    namespace: String,
+    class: String,
+    method: String,
+    args_override: Option<usize>,
+}
+
+fn parse_hook_args(attr: TokenStream2, attr_name: &str) -> ParseResult<IlHookArgs> {
+    let tokens: Vec<proc_macro2::TokenTree> = attr.into_iter().collect();
+    let mut strings: Vec<String> = Vec::new();
+    let mut args_override: Option<usize> = None;
+    let mut i = 0;
+
+    while i < tokens.len() {
+        match &tokens[i] {
+            proc_macro2::TokenTree::Literal(lit) => {
+                let s = lit.to_string();
+                if let Some(stripped) = s.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+                    strings.push(stripped.to_string());
+                } else if let Ok(n) = s.parse::<usize>() {
+                    if args_override.is_some() {
+                        return Err(venial::Error::new(format!(
+                            "#[unity2::{attr_name}] accepts at most one numeric args override"
+                        )));
+                    }
+                    args_override = Some(n);
+                } else {
+                    return Err(venial::Error::new(format!(
+                        "#[unity2::{attr_name}] expects string literals for namespace/class/method (got {s})"
+                    )));
+                }
+                i += 1;
+            }
+            proc_macro2::TokenTree::Punct(p) if p.as_char() == ',' => {
+                i += 1;
+            }
+            other => {
+                return Err(venial::Error::new(format!(
+                    "#[unity2::{attr_name}] unexpected token `{other}`; expected `(\"NS\", \"Class\", \"Method\")` or `(\"NS\", \"Class\", \"Method\", N)`"
+                )));
+            }
+        }
+    }
+
+    if strings.len() != 3 {
+        return Err(venial::Error::new(format!(
+            "#[unity2::{attr_name}] requires exactly 3 string literals (namespace, class, method); got {}",
+            strings.len()
+        )));
+    }
+
+    let method = strings.pop().unwrap();
+    let class = strings.pop().unwrap();
+    let namespace = strings.pop().unwrap();
+
+    Ok(IlHookArgs {
+        namespace,
+        class,
+        method,
+        args_override,
+    })
+}
+
+fn infer_il_arg_count(func: &venial::Function) -> usize {
+    let mut count = 0;
+    for (param, _) in func.params.inner.iter() {
+        match param {
+            venial::FnParam::Receiver(_) => {}
+            venial::FnParam::Typed(t) => {
+                let name = t.name.to_string();
+                if name == "this" || name == "method_info" || name.starts_with('_') {
+                    continue;
+                }
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn hook_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream2> {
+    let func = match item {
+        venial::Item::Function(f) => f,
+        _ => {
+            return Err(venial::Error::new(
+                "#[unity2::hook] can only be applied to function items",
+            ));
+        }
+    };
+
+    if func.body.is_none() {
+        return Err(venial::Error::new(
+            "#[unity2::hook] requires a function with a body; for a bare declaration use #[unity2::from_offset]",
+        ));
+    }
+
+    let parsed = parse_hook_args(attr, "hook")?;
+    let args_count = parsed.args_override.unwrap_or_else(|| infer_il_arg_count(&func));
+
+    let fn_name = &func.name;
+    let lookup_mod_ident = format_ident!("__unity2_hook_lookup_{}", fn_name);
+    let namespace = &parsed.namespace;
+    let class = &parsed.class;
+    let method = &parsed.method;
+
+    Ok(quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        mod #lookup_mod_ident {
+            static OFFSET: ::std::sync::LazyLock<::unity2::Il2CppResult<usize>> =
+                ::std::sync::LazyLock::new(|| {
+                    ::unity2::lookup::method_offset_by_name(#namespace, #class, #method, #args_count)
+                });
+            pub fn get_offset() -> usize {
+                match &*OFFSET {
+                    ::core::result::Result::Ok(o) => *o,
+                    ::core::result::Result::Err(e) => panic!(
+                        "#[unity2::hook({:?}, {:?}, {:?})] install failed: {}",
+                        #namespace, #class, #method, e
+                    ),
+                }
+            }
+        }
+
+        #[::skyline::hook(offset = #lookup_mod_ident::get_offset())]
+        #func
+    })
+}
+
+fn from_offset_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream2> {
+    let func = match item {
+        venial::Item::Function(f) => f,
+        _ => {
+            return Err(venial::Error::new(
+                "#[unity2::from_offset] can only be applied to function declarations",
+            ));
+        }
+    };
+
+    if func.body.is_some() {
+        return Err(venial::Error::new(
+            "#[unity2::from_offset] requires a bare function declaration (no body)",
+        ));
+    }
+
+    let parsed = parse_hook_args(attr, "from_offset")?;
+    let args_count = parsed.args_override.unwrap_or_else(|| infer_il_arg_count(&func));
+
+    let fn_name = &func.name;
+    let lookup_mod_ident = format_ident!("__unity2_offset_lookup_{}", fn_name);
+    let namespace = &parsed.namespace;
+    let class = &parsed.class;
+    let method = &parsed.method;
+
+    Ok(quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        mod #lookup_mod_ident {
+            static OFFSET: ::std::sync::LazyLock<::unity2::Il2CppResult<usize>> =
+                ::std::sync::LazyLock::new(|| {
+                    ::unity2::lookup::method_offset_by_name(#namespace, #class, #method, #args_count)
+                });
+            pub fn get_offset() -> usize {
+                match &*OFFSET {
+                    ::core::result::Result::Ok(o) => *o,
+                    ::core::result::Result::Err(e) => panic!(
+                        "#[unity2::from_offset({:?}, {:?}, {:?})] lookup failed: {}",
+                        #namespace, #class, #method, e
+                    ),
+                }
+            }
+        }
+
+        #[::skyline::from_offset(#lookup_mod_ident::get_offset() as usize)]
+        #func
+    })
+}
+
 fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream2> {
     let impl_block = match item {
         venial::Item::Impl(i) => i,
@@ -705,7 +893,7 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
                         #[allow(non_snake_case)]
                         pub mod #lookup_mod_ident {
                             use super::*;
-                            static OFFSET: ::std::sync::LazyLock<usize> =
+                            static OFFSET: ::std::sync::LazyLock<::unity2::Il2CppResult<usize>> =
                                 ::std::sync::LazyLock::new(|| {
                                     ::unity2::lookup::method_offset_by_name(
                                         <#self_ty as ::unity2::ClassIdentity>::NAMESPACE,
@@ -714,7 +902,17 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
                                         #args_count,
                                     )
                                 });
-                            pub fn get_offset() -> usize { *OFFSET }
+                            pub fn get_offset() -> usize {
+                                match &*OFFSET {
+                                    ::core::result::Result::Ok(o) => *o,
+                                    ::core::result::Result::Err(e) => panic!(
+                                        "#[unity2::methods] {}::{} lookup failed: {}",
+                                        <#self_ty as ::unity2::ClassIdentity>::NAME,
+                                        #il_name_lit,
+                                        e
+                                    ),
+                                }
+                            }
                         }
                     },
                 )
@@ -726,7 +924,7 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
                     #[allow(non_snake_case)]
                     pub mod #lookup_mod_ident {
                         use super::*;
-                        static OFFSET: ::std::sync::LazyLock<usize> =
+                        static OFFSET: ::std::sync::LazyLock<::unity2::Il2CppResult<usize>> =
                             ::std::sync::LazyLock::new(|| {
                                 ::unity2::lookup::method_offset_by_vtable_index(
                                     <#self_ty as ::unity2::ClassIdentity>::NAMESPACE,
@@ -734,7 +932,17 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
                                     #idx,
                                 )
                             });
-                        pub fn get_offset() -> usize { *OFFSET }
+                        pub fn get_offset() -> usize {
+                            match &*OFFSET {
+                                ::core::result::Result::Ok(o) => *o,
+                                ::core::result::Result::Err(e) => panic!(
+                                    "#[unity2::methods] {}[vtable {}] lookup failed: {}",
+                                    <#self_ty as ::unity2::ClassIdentity>::NAME,
+                                    #idx,
+                                    e
+                                ),
+                            }
+                        }
                     }
                 },
             ),

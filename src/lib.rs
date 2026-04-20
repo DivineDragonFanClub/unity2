@@ -299,6 +299,38 @@ impl<T: Copy> Array<T> {
     pub fn iter(self) -> ArrayIter<T> {
         self.into_iter()
     }
+
+    #[inline]
+    pub fn as_slice<'a>(&'a self) -> &'a [T] {
+        assert!(!self.is_null(), "Array::as_slice on null array");
+        unsafe { ::core::slice::from_raw_parts(self.items(), self.max_length()) }
+    }
+
+    #[inline]
+    pub fn as_mut_slice<'a>(&'a mut self) -> &'a mut [T] {
+        assert!(!self.is_null(), "Array::as_mut_slice on null array");
+        unsafe { ::core::slice::from_raw_parts_mut(self.items() as *mut T, self.max_length()) }
+    }
+
+    pub fn copy_from_slice(self, src: &[T]) {
+        assert!(!self.is_null(), "Array::copy_from_slice on null array");
+        let dst_len = self.max_length();
+        assert!(
+            src.len() <= dst_len,
+            "Array::copy_from_slice src len {} exceeds array len {}",
+            src.len(),
+            dst_len
+        );
+        unsafe {
+            ::core::ptr::copy_nonoverlapping(src.as_ptr(), self.items() as *mut T, src.len());
+        }
+    }
+}
+
+impl<T: Copy + ClassIdentity> Array<T> {
+    pub fn of_len(length: usize) -> Option<Self> {
+        Self::new(T::class().raw(), length)
+    }
 }
 
 impl<T: Copy> IntoIterator for Array<T> {

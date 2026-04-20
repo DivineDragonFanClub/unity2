@@ -32,6 +32,10 @@ impl Class {
                 .iter()
                 .find(|nt| nt.get_name() == inner)
                 .map(|&c| Self::from_raw(c))
+                .map(|class| {
+                    unsafe { api::class_init(class.inner) };
+                    class
+                })
                 .ok_or_else(|| crate::Il2CppError::MissingClass {
                     namespace: namespace.to_string(),
                     name: name.to_string(),
@@ -39,6 +43,11 @@ impl Class {
         }
         Il2CppClass::from_name(namespace, name)
             .map(|c| Self { inner: &*c })
+            .map(|class| {
+                // don't race the runtime's lazy population.
+                unsafe { api::class_init(class.inner) };
+                class
+            })
             .ok_or_else(|| crate::Il2CppError::MissingClass {
                 namespace: namespace.to_string(),
                 name: name.to_string(),
@@ -200,7 +209,7 @@ impl Class {
         let result_class = unsafe { api::class_from_il2cpptype(result_type) }?;
 
         unsafe { api::class_init(result_class) };
-        
+
         Some(Class::from_raw(result_class))
     }
 }

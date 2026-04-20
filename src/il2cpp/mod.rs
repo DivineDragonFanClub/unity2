@@ -42,7 +42,3 @@ pub struct Il2CppDomain {
     _opaque: [u8; 0],
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn il2cpp_init(domain_name: *const i8) -> i32 {
-    unsafe { api::init(domain_name) }
-}
