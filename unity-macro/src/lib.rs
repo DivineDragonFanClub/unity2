@@ -893,24 +893,31 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
                         #[allow(non_snake_case)]
                         pub mod #lookup_mod_ident {
                             use super::*;
-                            static OFFSET: ::std::sync::LazyLock<::unity2::Il2CppResult<usize>> =
-                                ::std::sync::LazyLock::new(|| {
-                                    ::unity2::lookup::method_offset_by_name(
-                                        <#self_ty as ::unity2::ClassIdentity>::NAMESPACE,
-                                        <#self_ty as ::unity2::ClassIdentity>::NAME,
-                                        #il_name_lit,
-                                        #args_count,
-                                    )
-                                });
-                            pub fn get_offset() -> usize {
-                                match &*OFFSET {
-                                    ::core::result::Result::Ok(o) => *o,
+                            static METHOD: ::std::sync::LazyLock<
+                                ::unity2::Il2CppResult<&'static ::unity2::il2cpp::MethodInfo>,
+                            > = ::std::sync::LazyLock::new(|| {
+                                ::unity2::lookup::method_info_on_class(
+                                    <#self_ty as ::unity2::ClassIdentity>::class(),
+                                    #il_name_lit,
+                                    #args_count,
+                                )
+                            });
+                            pub fn get_method_info() -> &'static ::unity2::il2cpp::MethodInfo {
+                                match &*METHOD {
+                                    ::core::result::Result::Ok(mi) => *mi,
                                     ::core::result::Result::Err(e) => panic!(
                                         "#[unity2::methods] {}::{} lookup failed: {}",
                                         <#self_ty as ::unity2::ClassIdentity>::NAME,
                                         #il_name_lit,
                                         e
                                     ),
+                                }
+                            }
+                            pub fn get_offset() -> usize {
+                                let method_ptr = get_method_info().method_ptr;
+                                let text = ::lazysimd::scan::get_text();
+                                unsafe {
+                                    (method_ptr as *const u8).offset_from(text.as_ptr()) as usize
                                 }
                             }
                         }
@@ -924,23 +931,30 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
                     #[allow(non_snake_case)]
                     pub mod #lookup_mod_ident {
                         use super::*;
-                        static OFFSET: ::std::sync::LazyLock<::unity2::Il2CppResult<usize>> =
-                            ::std::sync::LazyLock::new(|| {
-                                ::unity2::lookup::method_offset_by_vtable_index(
-                                    <#self_ty as ::unity2::ClassIdentity>::NAMESPACE,
-                                    <#self_ty as ::unity2::ClassIdentity>::NAME,
-                                    #idx,
-                                )
-                            });
-                        pub fn get_offset() -> usize {
-                            match &*OFFSET {
-                                ::core::result::Result::Ok(o) => *o,
+                        static METHOD: ::std::sync::LazyLock<
+                            ::unity2::Il2CppResult<&'static ::unity2::il2cpp::MethodInfo>,
+                        > = ::std::sync::LazyLock::new(|| {
+                            ::unity2::lookup::method_info_by_vtable_index_on_class(
+                                <#self_ty as ::unity2::ClassIdentity>::class(),
+                                #idx,
+                            )
+                        });
+                        pub fn get_method_info() -> &'static ::unity2::il2cpp::MethodInfo {
+                            match &*METHOD {
+                                ::core::result::Result::Ok(mi) => *mi,
                                 ::core::result::Result::Err(e) => panic!(
                                     "#[unity2::methods] {}[vtable {}] lookup failed: {}",
                                     <#self_ty as ::unity2::ClassIdentity>::NAME,
                                     #idx,
                                     e
                                 ),
+                            }
+                        }
+                        pub fn get_offset() -> usize {
+                            let method_ptr = get_method_info().method_ptr;
+                            let text = ::lazysimd::scan::get_text();
+                            unsafe {
+                                (method_ptr as *const u8).offset_from(text.as_ptr()) as usize
                             }
                         }
                     }
@@ -1025,6 +1039,23 @@ fn type_has_reference(ty: &venial::TypeExpr) -> bool {
     })
 }
 
+fn method_info_expr(m: &Method, raw_mod: &proc_macro2::Ident) -> TokenStream2 {
+    let lookup_mod_ident = format_ident!("__lookup_{}", m.name);
+    match m.resolution {
+        Resolution::Name { .. } | Resolution::VtableIndex(_) => quote! {
+            ::core::option::Option::Some(unsafe {
+                ::core::mem::transmute::<
+                    &'static ::unity2::il2cpp::MethodInfo,
+                    &'static (),
+                >(#raw_mod::#lookup_mod_ident::get_method_info())
+            })
+        },
+        Resolution::Offset(_) | Resolution::Pattern(_) => quote! {
+            ::core::option::Option::None
+        },
+    }
+}
+
 fn build_static_wrapper(m: &Method, raw_mod: &proc_macro2::Ident) -> TokenStream2 {
     let name = &m.name;
     let vis = &m.vis;
@@ -1049,7 +1080,8 @@ fn build_static_wrapper(m: &Method, raw_mod: &proc_macro2::Ident) -> TokenStream
         Some(t) => quote! { -> #t },
         None => quote! {},
     };
-    let call = quote! { #raw_mod::#name(#(#arg_exprs,)* ::core::option::Option::None) };
+    let mi_expr = method_info_expr(m, raw_mod);
+    let call = quote! { #raw_mod::#name(#(#arg_exprs,)* #mi_expr) };
 
     if m.is_unsafe {
         quote! {
@@ -1170,12 +1202,6 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
         None => quote! {},
     };
 
-    let sig = if m.is_static {
-        quote! { fn(#(#abi_types),*) -> #ret_ty }
-    } else {
-        quote! { fn(Self, #(#abi_types),*) -> #ret_ty }
-    };
-
     let extern_fn_ty = if m.is_static {
         quote! {
             extern "C" fn(
@@ -1216,6 +1242,8 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
         il2cpp_name,
     );
 
+    let il2cpp_arg_count = m.params.len();
+
     quote! {
         #unsafe_kw fn #name(#receiver #(#typed_params),*) #ret_clause #sized_bound {
             static CACHE: ::std::sync::OnceLock<(
@@ -1223,10 +1251,11 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
                 &'static ::unity2::MethodInfo,
             )> = ::std::sync::OnceLock::new();
             let (__ptr, __info) = *CACHE.get_or_init(|| {
-                let __m = <Self as ::unity2::ClassIdentity>::class()
-                    .method::<#sig>(#il2cpp_name_lit)
+                let __class = <Self as ::unity2::ClassIdentity>::class();
+                let __mi = __class.raw()
+                    .get_method_from_name(#il2cpp_name_lit, #il2cpp_arg_count)
                     .expect(#missing_msg);
-                (__m.raw_ptr() as usize, __m.info())
+                (__mi.method_ptr as usize, &*__mi)
             });
             let __f: #extern_fn_ty = unsafe { ::std::mem::transmute(__ptr) };
             __f(#call_args)
@@ -1262,11 +1291,12 @@ fn build_instance_wrapper(
         None => quote! {},
     };
 
+    let mi_expr = method_info_expr(m, raw_mod);
     let body = quote! {
         let __receiver = #self_ty::__unity2_from_il_instance(
             <Self as ::unity2::SystemObject>::as_instance(self),
         );
-        #raw_mod::#name(__receiver, #(#arg_exprs,)* ::core::option::Option::None)
+        #raw_mod::#name(__receiver, #(#arg_exprs,)* #mi_expr)
     };
 
     if m.is_unsafe {

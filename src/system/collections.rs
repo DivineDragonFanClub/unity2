@@ -15,6 +15,9 @@ pub struct List<T: ClassIdentity> {
 
 #[unity2::methods]
 impl<T: ClassIdentity> List<T> {
+    #[method(name = ".ctor", args = 0)]
+    fn ctor(self);
+
     #[method(name = "Add")]
     fn add(self, item: T);
 
@@ -53,6 +56,16 @@ impl<T: ClassIdentity> List<T> {
 }
 
 impl<T: ClassIdentity> List<T> {
+    pub fn new() -> Option<Self> {
+        let list = <Self as crate::FromIlInstance>::instantiate()?;
+        list.ctor();
+        Some(list)
+    }
+
+    pub fn with_capacity(_capacity: i32) -> Option<Self> {
+        Self::new()
+    }
+
     #[inline]
     pub fn is_empty(self) -> bool {
         self.count() == 0

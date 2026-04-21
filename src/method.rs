@@ -3,6 +3,24 @@ use std::marker::PhantomData;
 use crate::class::Class;
 use crate::il2cpp::MethodInfo;
 
+pub unsafe fn invoke_via_invoker<R: Copy>(
+    method_info: &'static MethodInfo,
+    this: *const (),
+    args: &[*const ()],
+) -> R {
+    debug_assert!(
+        !method_info.invoker_method.is_null(),
+        "invoke_via_invoker called on a MethodInfo with null invoker_method",
+    );
+    let invoker: extern "C" fn(
+        *mut u8,
+        &'static MethodInfo,
+        *const (),
+        *const *const (),
+    ) -> R = std::mem::transmute(method_info.invoker_method);
+    invoker(method_info.method_ptr, method_info, this, args.as_ptr())
+}
+
 const METHOD_ATTRIBUTE_STATIC: u16 = 0x0010;
 
 // Sig is a fn(...) -> R pointer type that encodes the call shape

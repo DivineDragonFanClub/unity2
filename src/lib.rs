@@ -24,6 +24,7 @@ macro_rules! method_info {
 mod backend_assertion;
 
 pub mod class;
+pub mod diag;
 pub mod engine;
 pub mod error;
 pub mod il2cpp;
@@ -383,21 +384,46 @@ where
     }
 }
 
-// Walks the full class hierarchy so inherited members aren't missed
+fn parent_chain(class: &Il2CppClass) -> impl Iterator<Item = &Il2CppClass> {
+    const MAX_DEPTH: usize = 16;
+
+    let mut cur: Option<&Il2CppClass> = Some(class);
+    let mut steps = 0usize;
+    std::iter::from_fn(move || {
+        let this = cur?;
+        steps += 1;
+        if steps >= MAX_DEPTH {
+            cur = None;
+            return Some(this);
+        }
+        let parent_ptr: *const Il2CppClass = this._1.parent;
+        cur = if parent_ptr.is_null() || std::ptr::eq(parent_ptr, this as *const _) {
+            None
+        } else {
+            Some(unsafe { &*parent_ptr })
+        };
+        Some(this)
+    })
+}
+
 pub fn get_properties(class: &Il2CppClass) -> Vec<&PropertyInfo> {
-    class
-        .get_class_hierarchy()
-        .iter()
-        .flat_map(|c| c.get_properties().iter())
-        .collect()
+    let mut out = Vec::new();
+    for c in parent_chain(class) {
+        for p in c.get_properties() {
+            out.push(p);
+        }
+    }
+    out
 }
 
 pub fn get_fields(class: &Il2CppClass) -> Vec<&FieldInfo> {
-    class
-        .get_class_hierarchy()
-        .iter()
-        .flat_map(|c| c.get_fields().iter())
-        .collect()
+    let mut out = Vec::new();
+    for c in parent_chain(class) {
+        for f in c.get_fields() {
+            out.push(f);
+        }
+    }
+    out
 }
 
 pub fn object_get_class<'a>(obj: impl SystemObject) -> &'a Il2CppClass {
@@ -435,18 +461,20 @@ pub fn il2cpp_enum_names(enum_class: Class) -> Option<Vec<String>> {
 }
 
 pub fn class_get_field_from_name<'a>(class: &'a Il2CppClass, name: &str) -> &'a FieldInfo {
-    get_fields(class)
-        .into_iter()
-        .find(|field| field.get_name().unwrap_or_default() == name)
-        .unwrap_or_else(|| {
-            panic!(
-                "{}",
-                Il2CppError::MissingField {
-                    class: class.get_name(),
-                    field: name.to_string(),
-                }
-            )
-        })
+    for c in parent_chain(class) {
+        for f in c.get_fields() {
+            if f.get_name().as_deref() == Some(name) {
+                return f;
+            }
+        }
+    }
+    panic!(
+        "{}",
+        Il2CppError::MissingField {
+            class: class.get_name(),
+            field: name.to_string(),
+        }
+    )
 }
 
 pub fn field_get_value<Ty: Copy>(obj: impl SystemObject, field: &FieldInfo) -> Ty {

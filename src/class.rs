@@ -175,11 +175,11 @@ impl Class {
         }
     }
 
-    // Resolves a generic class definition (e.g. List`1) against concrete type args with reflection
+    // Resolves a generic class definition (e.g. List`1) against concrete type args with reflection.
     pub fn make_generic(self, type_args: &[Class]) -> Option<Class> {
         let args_array: Array<SystemType> =
             Array::new(SystemType::class().raw(), type_args.len())?;
-            
+
         for (i, arg) in type_args.iter().enumerate() {
             let ty = SystemType::from_il2cpp_type(arg.raw().get_type())?;
             args_array.set(i, ty);
@@ -187,19 +187,42 @@ impl Class {
 
         let generic_type = SystemType::from_il2cpp_type(self.raw().get_type())?;
 
-        static MAKE_GENERIC_TYPE: OnceLock<
-            Method<fn(SystemType, Array<SystemType>) -> SystemType>,
-        > = OnceLock::new();
+        static MAKE_GENERIC_TYPE: OnceLock<&'static crate::il2cpp::MethodInfo> = OnceLock::new();
 
-        let method = MAKE_GENERIC_TYPE.get_or_init(|| {
-            Class::lookup("System", "RuntimeType")
-                .method::<fn(SystemType, Array<SystemType>) -> SystemType>(
-                    "MakeGenericType",
-                )
-                .expect("System.RuntimeType.MakeGenericType not found in IL2CPP metadata")
+        let method_info = *MAKE_GENERIC_TYPE.get_or_init(|| {
+            let cls = Class::lookup("System", "RuntimeType");
+            cls.raw()
+                .get_method_from_name("MakeGenericType", 2)
+                .expect("System.RuntimeType.MakeGenericType(Type, Type[]) not found in IL2CPP metadata")
         });
 
-        let result = method.call(generic_type, args_array);
+        if method_info.invoker_method.is_null() {
+            panic!("System.RuntimeType.MakeGenericType has null invoker_method");
+        }
+
+        let args: [*const (); 2] = [
+            crate::IlInstance::from(generic_type).as_ptr() as *const (),
+            crate::IlInstance::from(args_array).as_ptr() as *const (),
+        ];
+
+        let invoker: extern "C" fn(
+            *const u8,
+            *const crate::il2cpp::MethodInfo,
+            *const (),
+            *const *const (),
+        ) -> *mut crate::IlObject = unsafe { std::mem::transmute(method_info.invoker_method) };
+
+        let method_info_ptr: *const crate::il2cpp::MethodInfo = method_info;
+        let result_ptr = invoker(
+            method_info.method_ptr as *const u8,
+            method_info_ptr,
+            core::ptr::null(),
+            args.as_ptr(),
+        );
+
+        let result = <SystemType as crate::FromIlInstance>::from_il_instance(
+            crate::IlInstance::from_raw(result_ptr as *mut ()),
+        );
 
         if result.is_null() {
             return None;
