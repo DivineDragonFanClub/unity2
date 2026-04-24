@@ -7,7 +7,7 @@ use super::{
     Il2CppGenericClass, Il2CppGenericContainer, Il2CppRGCTXData, Il2CppType,
 };
 
-// Il2CppReflectionType is Il2CppObject header + *const Il2CppType, prefer the SystemType wrapper
+// Il2CppObject header plus *const Il2CppType, prefer the SystemType wrapper
 #[repr(C)]
 pub struct Il2CppReflectionType {
     _klass: *mut Il2CppClass,
@@ -15,7 +15,6 @@ pub struct Il2CppReflectionType {
     pub ty: *const Il2CppType,
 }
 
-// First half of Il2CppClass, field order is dependent on the Unity runtime so this can change
 #[repr(C)]
 pub struct Il2CppClass1 {
     pub image: &'static Il2CppImage,
@@ -34,12 +33,11 @@ pub struct Il2CppClass1 {
     pub properties: *const PropertyInfo,
     pub methods: *const &'static MethodInfo,
     pub nested_types: *const &'static Il2CppClass,
-    // Il2CppClass** with length = Il2CppClass2::interfaces_count
+    // Length is Il2CppClass2::interfaces_count
     implemented_interfaces: *const &'static Il2CppClass,
     interface_offsets: *const u8,
 }
 
-// Second half of Il2CppClass
 #[repr(C)]
 pub struct Il2CppClass2 {
     pub type_hierarchy: *const &'static Il2CppClass,
@@ -135,7 +133,6 @@ impl VirtualInvoke {
     }
 }
 
-// method_ptr is an immutable address in the game .text region, method_info is already 'static
 unsafe impl Send for VirtualInvoke {}
 unsafe impl Sync for VirtualInvoke {}
 
@@ -167,13 +164,40 @@ impl Il2CppClass {
         unsafe { std::slice::from_raw_parts(self.vtable.as_ptr(), self._2.vtable_count as _) }
     }
 
+    pub fn get_vtable_mut(&mut self) -> &mut [VirtualInvoke] {
+        unsafe {
+            std::slice::from_raw_parts_mut(self.vtable.as_mut_ptr(), self._2.vtable_count as _)
+        }
+    }
+
     pub fn get_virtual_method(&self, name: impl AsRef<str>) -> Option<&VirtualInvoke> {
         self.get_vtable()
             .iter()
             .find(|m| m.get_name().unwrap_or_default() == name.as_ref())
     }
 
-    // Declared fields only, inherited live on the parent
+    pub fn get_virtual_method_mut(
+        &mut self,
+        name: impl AsRef<str>,
+    ) -> Option<&mut VirtualInvoke> {
+        self.get_vtable_mut()
+            .iter_mut()
+            .find(|v| v.get_name().as_deref() == Some(name.as_ref()))
+    }
+
+    pub fn override_virtual_method(
+        &mut self,
+        name: impl AsRef<str>,
+        method_info: &'static MethodInfo,
+    ) -> Option<VirtualInvoke> {
+        let entry = self.get_virtual_method_mut(name)?;
+        let old = *entry;
+        entry.method_ptr = method_info.method_ptr;
+        entry.method_info = method_info;
+        Some(old)
+    }
+
+    // Declared only, inherited fields live on the parent
     pub fn get_fields(&self) -> &[FieldInfo] {
         unsafe { std::slice::from_raw_parts(self._1.fields, self._2.field_count as _) }
     }

@@ -7,7 +7,6 @@ pub struct Il2CppImage {
     pub name: *const u8,
     name_no_ext: *const u8,
     assembly: &'static Il2CppAssembly,
-    // More fields exist in the runtime but are unused here
 }
 
 impl Il2CppImage {
@@ -24,10 +23,9 @@ pub struct Il2CppAssembly {
     token: u32,
     referenced_assembly_start: i32,
     referenced_assembly_count: i32,
-    // More fields exist in the runtime but are unused here
 }
 
-// std::vector layout, we never resize, unity2 only reads
+// std::vector layout, read-only from unity2
 #[repr(C)]
 pub(crate) struct CppVector<T> {
     start: *const T,
@@ -45,7 +43,7 @@ impl<T> CppVector<T> {
     }
 }
 
-// Iterate in reverse if you want game assemblies before Unity and mscorlib
+// Iterate in reverse to get game assemblies before Unity and mscorlib
 pub fn get_assemblies() -> &'static [&'static Il2CppAssembly] {
     unsafe { api::assembly_getallassemblies() }.as_slice()
 }

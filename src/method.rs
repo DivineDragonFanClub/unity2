@@ -23,7 +23,6 @@ pub unsafe fn invoke_via_invoker<R: Copy>(
 
 const METHOD_ATTRIBUTE_STATIC: u16 = 0x0010;
 
-// Sig is a fn(...) -> R pointer type that encodes the call shape
 pub struct Method<Sig> {
     method_ptr: *mut u8,
     method_info: &'static MethodInfo,
@@ -38,7 +37,6 @@ impl<Sig> Clone for Method<Sig> {
 
 impl<Sig> Copy for Method<Sig> {}
 
-// method_ptr is an immutable function pointer into the game .text region
 unsafe impl<Sig> Send for Method<Sig> {}
 unsafe impl<Sig> Sync for Method<Sig> {}
 
@@ -57,7 +55,6 @@ pub trait MethodSignature {
 }
 
 impl Class {
-    // Walks the hierarchy upward, needed for subclasses that inherit methods from a generic parent
     pub fn method<Sig: MethodSignature>(self, name: &str) -> Option<Method<Sig>> {
         for ancestor in self.hierarchy() {
             let cls = ancestor.raw();
@@ -100,8 +97,6 @@ impl Class {
     }
 }
 
-// For each N parameters, emit MethodSignature and Method<fn(A1,..,An) -> R>::call
-// `call` transmutes method_ptr to an extern "C" fn with the trailing MethodInfo* slot
 macro_rules! impl_method {
     ($param_count:literal $(, $arg:ident : $a:ident)*) => {
         impl<$($a,)* R> MethodSignature for fn($($a),*) -> R {

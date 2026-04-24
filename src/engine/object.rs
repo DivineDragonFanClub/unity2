@@ -1,5 +1,4 @@
 // UnityEngine.Object and descendants, distinct from System.Object
-
 #![allow(unused_imports)]
 
 use crate::class::Class;
@@ -7,7 +6,7 @@ use crate::system::Il2CppString;
 use crate::{ClassIdentity, IlInstance};
 
 use super::color::Color;
-use super::vector::{Quaternion, Vector3};
+use super::vector::{Quaternion, Rect, Vector2, Vector3};
 
 #[unity2::class(namespace = "UnityEngine")]
 pub struct Object {}
@@ -81,7 +80,7 @@ impl Component {
 }
 
 #[unity2::class(namespace = "UnityEngine")]
-#[parent(Component, Object)]
+#[parent(Component)]
 pub struct Transform {}
 
 #[unity2::methods]
@@ -133,7 +132,7 @@ impl Transform {
 }
 
 #[unity2::class(namespace = "UnityEngine")]
-#[parent(Component, Object)]
+#[parent(Component)]
 pub struct Behaviour {}
 
 #[unity2::methods]
@@ -149,7 +148,7 @@ impl Behaviour {
 }
 
 #[unity2::class(namespace = "UnityEngine")]
-#[parent(Behaviour, Component, Object)]
+#[parent(Behaviour)]
 pub struct MonoBehaviour {}
 
 #[unity2::class(namespace = "UnityEngine")]
@@ -178,22 +177,90 @@ impl Material {
     fn has_property(self, name: Il2CppString) -> bool;
 }
 
+#[unity2::enumeration(namespace = "UnityEngine", name = "FilterMode")]
+#[repr(i32)]
+pub enum FilterMode {
+    Point = 0,
+    Bilinear = 1,
+    Trilinear = 2,
+}
+
+// set_filterMode and set_anisoLevel live on Texture rather than Texture2D so subclasses inherit
 #[unity2::class(namespace = "UnityEngine")]
 #[parent(Object)]
 pub struct Texture {}
 
 #[unity2::methods]
 impl Texture {
-    #[method(name = "get_width")]
-    fn width(self) -> i32;
+    #[method(name = "get_width", args = 0)]
+    pub fn width(self) -> i32;
 
-    #[method(name = "get_height")]
-    fn height(self) -> i32;
+    #[method(name = "get_height", args = 0)]
+    pub fn height(self) -> i32;
+
+    #[method(name = "set_filterMode", args = 1)]
+    pub fn set_filter_mode(self, value: FilterMode);
+
+    #[method(name = "get_filterMode", args = 0)]
+    pub fn filter_mode(self) -> FilterMode;
+
+    #[method(name = "set_anisoLevel", args = 1)]
+    pub fn set_aniso_level(self, value: i32);
 }
 
 #[unity2::class(namespace = "UnityEngine")]
-#[parent(Texture, Object)]
+#[parent(Texture)]
 pub struct Texture2D {}
+
+#[unity2::methods]
+impl Texture2D {
+    #[method(name = ".ctor", args = 2)]
+    pub fn ctor(self, width: i32, height: i32);
+
+    // Three 4-arg overloads exist (DefaultFormat, GraphicsFormat, TextureFormat), pin by RVA
+    #[method(offset = 0x378BB90)]
+    pub fn ctor_with_format(self, width: i32, height: i32, texture_format: i32, mip_chain: bool);
+
+    #[method(name = "Apply", args = 1)]
+    pub fn apply(self, update_mipmaps: bool);
+
+    #[method(name = "get_format", args = 0)]
+    pub fn format(self) -> i32;
+
+    #[method(name = "GetRawTextureData", args = 0)]
+    pub fn get_raw_texture_data(self) -> crate::Array<u8>;
+
+    #[method(name = "SetPixelDataImplArray", args = 5)]
+    pub fn set_pixel_data_impl_array(
+        self,
+        data: crate::Array<u8>,
+        mip_level: i32,
+        element_size: i32,
+        data_array_size: i32,
+        source_data_start_index: i32,
+    ) -> bool;
+}
+
+impl Texture2D {
+    pub fn new(width: i32, height: i32) -> Self {
+        let this = <Self as crate::FromIlInstance>::instantiate().expect("Texture2D::instantiate");
+        this.ctor(width, height);
+        this
+    }
+
+    pub fn new_with_format(width: i32, height: i32, texture_format: i32, mip_chain: bool) -> Self {
+        let this = <Self as crate::FromIlInstance>::instantiate().expect("Texture2D::instantiate");
+        this.ctor_with_format(width, height, texture_format, mip_chain);
+        this
+    }
+}
+
+#[unity2::enumeration(namespace = "UnityEngine", name = "SpriteMeshType")]
+#[repr(i32)]
+pub enum SpriteMeshType {
+    FullRect = 0,
+    Tight = 1,
+}
 
 #[unity2::class(namespace = "UnityEngine")]
 #[parent(Object)]
@@ -201,6 +268,28 @@ pub struct Sprite {}
 
 #[unity2::methods]
 impl Sprite {
-    #[method(name = "get_texture")]
-    fn texture(self) -> Texture2D;
+    #[method(name = "get_texture", args = 0)]
+    pub fn texture(self) -> Texture2D;
+
+    #[method(name = "Create", args = 6)]
+    pub fn create(
+        texture: Texture2D,
+        rect: Rect,
+        pivot: Vector2,
+        pixels_per_unit: f32,
+        extrude: u32,
+        mesh_type: SpriteMeshType,
+    ) -> Sprite;
+}
+
+#[unity2::class(namespace = "UnityEngine")]
+pub struct ImageConversion {}
+
+#[unity2::methods]
+impl ImageConversion {
+    #[method(name = "LoadImage", args = 2)]
+    pub fn load_image(texture: Texture2D, data: crate::Array<u8>) -> bool;
+
+    #[method(name = "EncodeToPNG", args = 1)]
+    pub fn encode_to_png(texture: Texture2D) -> crate::Array<u8>;
 }

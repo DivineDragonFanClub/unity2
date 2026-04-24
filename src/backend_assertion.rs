@@ -1,10 +1,5 @@
-// Exactly-one backend feature enforced at compile time, scales O(N) with backends
-
 const BACKEND_COUNT: usize = 0
     + cfg!(feature = "fe-engage") as usize
-    // Future
-    // + cfg!(feature = "eo3hd")    as usize
-    // + cfg!(feature = "tokimemo") as usize
     ;
 
 const _: () = assert!(

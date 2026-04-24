@@ -106,8 +106,24 @@ impl<T: ClassIdentity> Iterator for ListIter<T> {
 
 impl<T: ClassIdentity> ExactSizeIterator for ListIter<T> {}
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct DictionaryEntry<K: Copy, V: Copy> {
+    pub hash_code: i32,
+    pub next: i32,
+    pub key: K,
+    pub value: V,
+}
+
 #[unity2::class(namespace = "System.Collections.Generic", name = "Dictionary`2")]
-pub struct Dictionary<K: ClassIdentity, V: ClassIdentity> {}
+pub struct Dictionary<K: ClassIdentity, V: ClassIdentity> {
+    #[rename(name = "entries")]
+    #[readonly]
+    pub entries: Array<DictionaryEntry<K, V>>,
+    #[rename(name = "count")]
+    #[readonly]
+    pub count: i32,
+}
 
 #[unity2::methods]
 impl<K: ClassIdentity, V: ClassIdentity> Dictionary<K, V> {
@@ -126,7 +142,7 @@ impl<K: ClassIdentity, V: ClassIdentity> Dictionary<K, V> {
     #[method(name = "ContainsValue")]
     fn contains_value(self, value: V) -> bool;
 
-    // TryGetValue(K, out V) -> bool, the out slot in C# is equivalent to &mut V in Rust
+    // TryGetValue's C# `out V` slot maps to &mut V in Rust
     #[method(name = "TryGetValue")]
     fn try_get_value(self, key: K, value: &mut V) -> bool;
 
@@ -137,5 +153,38 @@ impl<K: ClassIdentity, V: ClassIdentity> Dictionary<K, V> {
     fn set(self, key: K, value: V);
 
     #[method(name = "get_Count")]
-    fn count(self) -> i32;
+    fn count_via_getter(self) -> i32;
+}
+
+impl<K: ClassIdentity, V: ClassIdentity> Dictionary<K, V> {
+    pub fn iter(self) -> DictionaryIter<K, V> {
+        let entries = self.entries();
+        let len = self.count() as usize;
+        DictionaryIter {
+            entries,
+            index: 0,
+            len,
+        }
+    }
+}
+
+pub struct DictionaryIter<K: ClassIdentity, V: ClassIdentity> {
+    entries: Array<DictionaryEntry<K, V>>,
+    index: usize,
+    len: usize,
+}
+
+impl<K: ClassIdentity, V: ClassIdentity> Iterator for DictionaryIter<K, V> {
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<(K, V)> {
+        while self.index < self.len {
+            let entry = self.entries.get(self.index);
+            self.index += 1;
+            if entry.hash_code >= 0 {
+                return Some((entry.key, entry.value));
+            }
+        }
+        None
+    }
 }

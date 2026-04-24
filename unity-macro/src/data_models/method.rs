@@ -8,7 +8,6 @@ use crate::util::{KvParser, bail};
 pub enum Resolution {
     Offset(Literal),
     Pattern(String),
-    // #[method], #[method(name = "...")], #[method(name = "...", args = N)], or #[method(args = N)]
     Name {
         name: String,
         args: Option<usize>,
@@ -38,7 +37,6 @@ impl Method {
         // Bare #[method] (no parens) means "look up by name = rust ident"
         let mut parser = KvParser::parse(&func.attributes, "method")?;
 
-        // Reserved for a later iteration
         if let Some(p) = parser.as_mut() {
             if let Some((id, _)) = p.handle_any_entry("token") {
                 return bail!(

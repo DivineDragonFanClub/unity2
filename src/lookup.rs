@@ -1,5 +1,3 @@
-// Runtime helpers the macro calls from per-method LazyLock<Result<usize, Il2CppError>> offsets
-
 use crate::il2cpp::MethodInfo;
 use crate::{Class, Il2CppError, Il2CppResult};
 
@@ -84,6 +82,25 @@ pub fn method_info_on_class(
     param_count: usize,
 ) -> Il2CppResult<&'static MethodInfo> {
     let raw = class.raw();
+
+    let matches = raw
+        .get_methods()
+        .iter()
+        .filter(|m| {
+            m.parameters_count as usize == param_count
+                && m.get_name().as_deref() == Some(method_name)
+        })
+        .count();
+
+    if matches > 1 {
+        return Err(Il2CppError::AmbiguousMethod {
+            class: format!("{}.{}", raw.get_namespace(), raw.get_name()),
+            method: method_name.to_string(),
+            param_count,
+            overload_count: matches,
+        });
+    }
+
     raw.get_method_from_name(method_name, param_count)
         .map(|mi| &*mi)
         .ok_or_else(|| Il2CppError::MissingMethod {

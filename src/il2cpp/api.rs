@@ -1,5 +1,3 @@
-// Raw IL2CPP runtime entry points resolved by byte-pattern scan
-
 use lazysimd;
 
 use super::{
@@ -47,7 +45,7 @@ pub(crate) fn type_get_object(ty: &Il2CppType) -> SystemType;
 )]
 pub(crate) fn class_from_il2cpptype(ty: &Il2CppType) -> Option<&'static mut Il2CppClass>;
 
-// Finalizes field and method and vtable metadata, required after resolving a class from a generic Il2CppType
+// Required after resolving a class from a generic Il2CppType, finalizes field/method/vtable metadata
 #[lazysimd::from_pattern(
     "fd 7b bd a9 f5 0b 00 f9 fd 03 00 91 f4 4f 02 a9 08 c8 44 39 08 03 10 37 ?? ?? ?? ?? ?? ?? ?? ?? f3 03 00 aa b5 0f 00 f9"
 )]
@@ -59,7 +57,7 @@ pub(crate) fn class_init(class: &Il2CppClass);
 )]
 pub(crate) fn object_new(klass: &Il2CppClass) -> crate::IlInstance;
 
-// kind = 0 is Normal (scanned), 1 is Atomic (not scanned), class cloning uses Normal
+// kind 0 is Normal (scanned), 1 is Atomic (not scanned), class cloning uses Normal
 #[skyline::from_offset(0x474370)]
 pub(crate) fn gc_malloc_kind(size: usize, kind: u32) -> *mut u8;
 
@@ -76,12 +74,11 @@ pub(crate) fn array_new<T: Copy>(
 )]
 pub(crate) fn string_new(c_str: *const u8) -> crate::Il2CppString;
 
-// Allocates a System.String with an uninitialized UTF-16 buffer of `length` characters
-// a length of 0 returns the s_EmptyString static instance, do NOT write into it
+// length 0 returns the s_EmptyString static instance, do NOT write into it
 #[skyline::from_offset(0x44a168)]
 pub(crate) fn string_new_size(length: i32, method_info: crate::OptionalMethod) -> crate::Il2CppString;
 
-// Walks assemblies in reverse so game-specific ones beat Unity and mscorlib
+// Reversed so game-specific assemblies beat Unity and mscorlib
 pub(crate) fn get_class_from_name(
     namespace: impl AsRef<str>,
     name: impl AsRef<str>,

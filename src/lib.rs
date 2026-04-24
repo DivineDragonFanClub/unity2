@@ -1,4 +1,5 @@
-// Lets the proc macros' `::unity2::…` paths resolve when they're invoked inside this crate
+#![allow(macro_expanded_macro_exports_accessed_by_absolute_paths)]
+
 extern crate self as unity2;
 
 use crate::il2cpp::Il2CppClass;
@@ -7,18 +8,25 @@ pub use unity_macro::*;
 
 #[macro_export]
 macro_rules! method_info {
-    ($callback:expr, $parameters_count:expr $(,)?) => {{
-        static __UNITY2_MI: ::std::sync::OnceLock<&'static $crate::MethodInfo> =
-            ::std::sync::OnceLock::new();
-        *__UNITY2_MI.get_or_init(|| {
-            let __mi = ::std::boxed::Box::leak(::std::boxed::Box::new(
-                $crate::MethodInfo::new(),
-            ));
-            __mi.method_ptr = $callback as *mut u8;
-            __mi.parameters_count = $parameters_count;
-            &*__mi
-        })
-    }};
+    ($callback:expr, $parameters_count:expr $(,)?) => {
+        $crate::method_info_for_fn($callback as *mut u8, $parameters_count)
+    };
+}
+
+pub fn method_info_for_fn(method_ptr: *mut u8, parameters_count: u8) -> &'static MethodInfo {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    static CACHE: Mutex<Option<HashMap<usize, &'static MethodInfo>>> = Mutex::new(None);
+
+    let mut guard = CACHE.lock().unwrap();
+    let map = guard.get_or_insert_with(HashMap::new);
+    *map.entry(method_ptr as usize).or_insert_with(|| {
+        let mi = Box::leak(Box::new(MethodInfo::new()));
+        mi.method_ptr = method_ptr;
+        mi.parameters_count = parameters_count;
+        &*mi
+    })
 }
 
 mod backend_assertion;
@@ -41,7 +49,6 @@ pub use system::{Il2CppString, SystemType};
 
 pub type OptionalMethod = ::core::option::Option<&'static ()>;
 
-// Lets primitives participate in reflection without a manual class lookup
 macro_rules! impl_primitive_class_identity {
     ($($rust:ty => $il2cpp:literal),* $(,)?) => {
         $(
@@ -52,6 +59,12 @@ macro_rules! impl_primitive_class_identity {
                 fn class() -> Class {
                     static CACHE: ::std::sync::OnceLock<Class> = ::std::sync::OnceLock::new();
                     *CACHE.get_or_init(|| Class::lookup(Self::NAMESPACE, Self::NAME))
+                }
+            }
+
+            impl IlType for $rust {
+                fn il_type() -> &'static il2cpp::Il2CppType {
+                    &<Self as ClassIdentity>::class().raw()._1.byval_arg
                 }
             }
         )*
@@ -73,6 +86,62 @@ impl_primitive_class_identity! {
     char => "Char",
 }
 
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct IntPtr(pub *mut ());
+
+unsafe impl Send for IntPtr {}
+unsafe impl Sync for IntPtr {}
+
+impl IntPtr {
+    #[inline]
+    pub const fn null() -> Self {
+        Self(std::ptr::null_mut())
+    }
+
+    #[inline]
+    pub fn is_null(self) -> bool {
+        self.0.is_null()
+    }
+
+    #[inline]
+    pub fn as_ptr<T>(self) -> *mut T {
+        self.0 as *mut T
+    }
+}
+
+impl ClassIdentity for IntPtr {
+    const NAMESPACE: &'static str = "System";
+    const NAME: &'static str = "IntPtr";
+
+    fn class() -> Class {
+        static CACHE: ::std::sync::OnceLock<Class> = ::std::sync::OnceLock::new();
+        *CACHE.get_or_init(|| Class::lookup(Self::NAMESPACE, Self::NAME))
+    }
+}
+
+impl IlType for IntPtr {
+    fn il_type() -> &'static il2cpp::Il2CppType {
+        &<Self as ClassIdentity>::class().raw()._1.byval_arg
+    }
+}
+
+pub trait IlType {
+    fn il_type() -> &'static il2cpp::Il2CppType;
+}
+
+impl IlType for () {
+    fn il_type() -> &'static il2cpp::Il2CppType {
+        &Class::lookup("System", "Void").raw()._1.byval_arg
+    }
+}
+
+impl<T: Copy + ClassIdentity> IlType for Array<T> {
+    fn il_type() -> &'static il2cpp::Il2CppType {
+        &T::class().array_class().raw()._1.byval_arg
+    }
+}
+
 pub trait ClassIdentity: Copy {
     const NAMESPACE: &'static str;
     const NAME: &'static str;
@@ -82,9 +151,19 @@ pub trait ClassIdentity: Copy {
 
 pub trait FromIlInstance: Sized + ClassIdentity {
     fn from_il_instance(instance: IlInstance) -> Self;
-    
+
     fn instantiate() -> Option<Self> {
         let inst = unsafe { crate::il2cpp::api::object_new(Self::class().raw()) };
+        if inst.is_null() {
+            None
+        } else {
+            Some(Self::from_il_instance(inst))
+        }
+    }
+
+    /// Caller swears `class` is a subtype of `Self` or layout compatible
+    fn instantiate_with_class(class: crate::class::Class) -> Option<Self> {
+        let inst = unsafe { crate::il2cpp::api::object_new(class.raw()) };
         if inst.is_null() {
             None
         } else {
@@ -95,7 +174,7 @@ pub trait FromIlInstance: Sized + ClassIdentity {
 
 pub trait Cast: SystemObject {
     #[inline]
-    fn class(self) -> Class {
+    fn get_class(self) -> Class {
         Class::from_raw(object_get_class(self))
     }
 
@@ -104,7 +183,6 @@ pub trait Cast: SystemObject {
         self.as_instance().is_null()
     }
 
-    // Points this instance's klass field at `new_class`
     fn rebind_class(self, new_class: Class) {
         assert!(!self.as_instance().is_null(), "Cast::rebind_class on null instance");
         unsafe {
@@ -114,22 +192,20 @@ pub trait Cast: SystemObject {
         }
     }
 
-    // Clone this instance's class and rebind to it so overrides are per-instance
     fn override_class(self) -> Class {
-        let cloned = self.class().clone_for_override();
+        let cloned = self.get_class().clone_for_override();
         self.rebind_class(cloned);
         cloned
     }
 
     #[inline]
     fn is_instance_of<T: ClassIdentity>(self) -> bool {
-        self.class().is_subclass_of::<T>()
+        self.get_class().is_subclass_of::<T>()
     }
 
-    // True when this instance's immediate parent class is exactly T, does not match T itself
     #[inline]
     fn is_direct_subclass_of<T: ClassIdentity>(self) -> bool {
-        self.class().parent_is::<T>()
+        self.get_class().parent_is::<T>()
     }
 
     #[inline]
@@ -186,7 +262,6 @@ impl IlInstance {
         self.0.is_null()
     }
 
-    // Pointer past the 16-byte header, into the object's fields
     #[inline]
     pub(crate) fn field_ptr(self, offset: usize) -> *mut u8 {
         unsafe { (self.0 as *mut u8).add(offset) }
@@ -331,6 +406,12 @@ impl<T: Copy> Array<T> {
 impl<T: Copy + ClassIdentity> Array<T> {
     pub fn of_len(length: usize) -> Option<Self> {
         Self::new(T::class().raw(), length)
+    }
+
+    pub fn from_slice(src: &[T]) -> Option<Self> {
+        let arr = Self::of_len(src.len())?;
+        arr.copy_from_slice(src);
+        Some(arr)
     }
 }
 
@@ -498,7 +579,6 @@ pub fn field_set_value_at_offset<Ty: Copy>(obj: impl SystemObject, offset: usize
     }
 }
 
-// Static fields share the offset convention with instance fields but sit in the class's static-fields block
 pub fn static_field_get_value_at_offset<Ty: Copy>(class: Class, offset: usize) -> Ty {
     let base = class.raw().static_fields as *const u8;
     unsafe { *(base.add(offset) as *const Ty) }

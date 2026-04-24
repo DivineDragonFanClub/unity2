@@ -76,7 +76,7 @@ impl Field {
     }
 }
 
-// Covers the common case, preserved acronyms need explicit #[backing(name = "...")]
+// Acronyms that must be preserved need explicit #[backing(name = "...")]
 fn snake_to_pascal(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut upper_next = true;
@@ -93,7 +93,6 @@ fn snake_to_pascal(s: &str) -> String {
     out
 }
 
-// proc_macro2::Literal doesn't expose a string accessor without syn
 pub(crate) fn unquote_string_literal(s: &str) -> String {
     let trimmed = s.trim();
     if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {

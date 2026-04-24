@@ -33,7 +33,7 @@ impl Class {
                 .find(|nt| nt.get_name() == inner)
                 .map(|&c| Self::from_raw(c))
                 .map(|class| {
-                    unsafe { api::class_init(class.inner) };
+                    unsafe { api::class_init(class.raw()) };
                     class
                 })
                 .ok_or_else(|| crate::Il2CppError::MissingClass {
@@ -42,10 +42,9 @@ impl Class {
                 });
         }
         Il2CppClass::from_name(namespace, name)
-            .map(|c| Self { inner: &*c })
+            .map(|c| Self::from_raw(c))
             .map(|class| {
-                // don't race the runtime's lazy population.
-                unsafe { api::class_init(class.inner) };
+                unsafe { api::class_init(class.raw()) };
                 class
             })
             .ok_or_else(|| crate::Il2CppError::MissingClass {
@@ -59,27 +58,34 @@ impl Class {
         self.inner
     }
 
+    #[inline]
+    pub fn raw_mut(self) -> &'static mut Il2CppClass {
+        #[allow(invalid_reference_casting)]
+        unsafe {
+            &mut *((self.inner as *const Il2CppClass) as *mut Il2CppClass)
+        }
+    }
+
     pub fn name(self) -> String {
-        self.inner.get_name()
+        self.raw().get_name()
     }
 
     pub fn namespace(self) -> String {
-        self.inner.get_namespace()
+        self.raw().get_namespace()
     }
 
     pub fn parent(self) -> Option<Class> {
-        let parent = self.inner._1.parent;
+        let parent = self.raw()._1.parent;
 
         if std::ptr::eq(parent as *const _, self.inner as *const _) {
             None
         } else {
-            Some(Class { inner: parent })
+            Some(Class::from_raw(parent))
         }
     }
 
-    // Flat walk over the cached type_hierarchy slice
     pub fn hierarchy(self) -> impl Iterator<Item = Class> {
-        self.inner
+        self.raw()
             .get_class_hierarchy()
             .iter()
             .map(|&c| Class::from_raw(c))
@@ -89,35 +95,35 @@ impl Class {
         self == T::class()
     }
 
-    // Immediate parent match only, does not walk the hierarchy
+    // Immediate parent only, does not walk the hierarchy
     pub fn parent_is<T: ClassIdentity>(self) -> bool {
         self.parent().is_some_and(|p| p.is::<T>())
     }
 
     pub fn interfaces(self) -> impl Iterator<Item = Class> {
-        self.inner
+        self.raw()
             .get_implemented_interfaces()
             .iter()
             .map(|&c| Class::from_raw(c))
     }
 
-    // Matches il2cpp_class_is_assignable_from, hierarchy walk + flattened interfaces
+    // Matches il2cpp_class_is_assignable_from, hierarchy walk plus flattened interfaces
     pub fn is_subclass_of<T: ClassIdentity>(self) -> bool {
         let target = T::class();
         self.hierarchy().any(|c| c == target) || self.interfaces().any(|i| i == target)
     }
 
-    // Declared-only, walk hierarchy().flat_map(|c| c.declared_fields()) for inherited too
+    // Declared only, walk hierarchy().flat_map(|c| c.declared_fields()) for inherited
     pub fn declared_fields(self) -> &'static [FieldInfo] {
-        self.inner.get_fields()
+        self.raw().get_fields()
     }
 
     pub fn declared_methods(self) -> &'static [&'static MethodInfo] {
-        self.inner.get_methods()
+        self.raw().get_methods()
     }
 
     pub fn declared_properties(self) -> &'static [PropertyInfo] {
-        self.inner.get_properties()
+        self.raw().get_properties()
     }
 }
 
@@ -134,7 +140,7 @@ impl Class {
         const VIRTUAL_INVOKE_SIZE: usize = ::core::mem::size_of::<crate::il2cpp::VirtualInvoke>();
 
         let src = self.raw();
-        let size = HEADER_SIZE + VIRTUAL_INVOKE_SIZE * src._2.vtable_count as usize; // all my homies HATe pointer math
+        let size = HEADER_SIZE + VIRTUAL_INVOKE_SIZE * src._2.vtable_count as usize;
 
         unsafe {
             // kind = 0 is Normal scanned allocation
@@ -150,32 +156,25 @@ impl Class {
         }
     }
 
-    /// Only safe on a clone_for_override result, writing in the shared class's vtable affects every instance
+    #[inline]
     pub fn override_virtual_method(
         self,
-        name: &str,
+        name: impl AsRef<str>,
         method_info: &'static crate::il2cpp::MethodInfo,
     ) -> Option<crate::il2cpp::VirtualInvoke> {
-        let class = self.raw();
-
-        let slot = class
-            .get_vtable()
-            .iter()
-            .position(|v| v.get_name().as_deref() == Some(name))?;
-
-        unsafe {
-            let vtable_ptr = class.get_vtable().as_ptr() as *mut crate::il2cpp::VirtualInvoke;
-            let entry = &mut *vtable_ptr.add(slot);
-            let old = *entry;
-
-            entry.method_ptr = method_info.method_ptr;
-            entry.method_info = method_info;
-
-            Some(old)
-        }
+        self.raw_mut().override_virtual_method(name, method_info)
     }
 
-    // Resolves a generic class definition (e.g. List`1) against concrete type args with reflection.
+    pub fn array_class(self) -> Class {
+        let arr: Array<u8> = unsafe { api::array_new::<u8>(self.raw(), 0) };
+        // Il2CppArraySize header's first field is *const Il2CppClass regardless of T
+        let class_ptr: *const Il2CppClass =
+            unsafe { *(crate::IlInstance::from(arr).as_ptr() as *const *const Il2CppClass) };
+        let class_ref: &'static Il2CppClass = unsafe { &*class_ptr };
+        unsafe { api::class_init(class_ref) };
+        Self::from_raw(class_ref)
+    }
+
     pub fn make_generic(self, type_args: &[Class]) -> Option<Class> {
         let args_array: Array<SystemType> =
             Array::new(SystemType::class().raw(), type_args.len())?;

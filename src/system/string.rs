@@ -175,7 +175,6 @@ impl Il2CppString {
     fn get_hash_code(self) -> i32;
 }
 
-// Ergonomic variants that accept &str or String
 impl Il2CppString {
     #[inline]
     pub fn starts_with<S: Into<Il2CppString>>(self, value: S) -> bool {

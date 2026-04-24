@@ -35,6 +35,9 @@ pub struct ParameterInfo {
     pub parameter_type: &'static Il2CppType,
 }
 
+unsafe impl Send for ParameterInfo {}
+unsafe impl Sync for ParameterInfo {}
+
 impl MethodInfo {
     pub fn new() -> Self {
         unsafe { ::core::mem::zeroed() }

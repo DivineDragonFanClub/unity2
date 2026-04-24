@@ -15,7 +15,7 @@ pub(crate) use data_models::method::{Method, Resolution};
 
 type ParseResult<T> = Result<T, venial::Error>;
 
-// Lifted from godot-rust, parses the input, runs the transform, converts errors to compile_error!
+// Lifted from godot-rust
 fn translate<F>(input: TokenStream, transform: F) -> TokenStream
 where
     F: FnOnce(venial::Item) -> ParseResult<TokenStream2>,
@@ -73,7 +73,6 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
     let vis = class.vis_marker.clone();
     let class_attrs = ClassAttrs::parse(attr, class_ident.to_string(), &class.attributes)?;
 
-    // Forward every outer attribute except #[parent(...)], which the macro consumes
     let passthrough_attrs: Vec<&venial::Attribute> = class
         .attributes
         .iter()
@@ -115,7 +114,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         })
         .unwrap_or_default();
 
-    // Lifetimes and const generics have no IL2CPP analogue and would need special-casing
+    // Lifetimes and const generics have no IL2CPP analogue
     if let Some(gp) = class.generic_params.as_ref() {
         for param in gp.params.items() {
             if param.tk_prefix.is_some() {
@@ -161,54 +160,159 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         )
     };
 
+    let ancestor_macro_ident = format_ident!("__{}_ancestor_impls", class_ident);
+
+    let gen_meta_idents: Vec<proc_macro2::Ident> = (0..type_param_idents.len())
+        .map(|i| format_ident!("__g{}", i))
+        .collect();
+
+    fn rewrite_tpidents(
+        stream: TokenStream2,
+        params: &[&proc_macro2::Ident],
+        metas: &[proc_macro2::Ident],
+    ) -> TokenStream2 {
+        let mut out = TokenStream2::new();
+        let dollar = proc_macro2::Punct::new('$', proc_macro2::Spacing::Alone);
+        for tt in stream {
+            match tt {
+                proc_macro2::TokenTree::Ident(ref id) => {
+                    if let Some(idx) = params.iter().position(|p| *p == id) {
+                        out.extend(std::iter::once(proc_macro2::TokenTree::Punct(dollar.clone())));
+                        out.extend(std::iter::once(proc_macro2::TokenTree::Ident(metas[idx].clone())));
+                    } else {
+                        out.extend(std::iter::once(tt));
+                    }
+                }
+                proc_macro2::TokenTree::Group(g) => {
+                    let inner = rewrite_tpidents(g.stream(), params, metas);
+                    let mut new_group = proc_macro2::Group::new(g.delimiter(), inner);
+                    new_group.set_span(g.span());
+                    out.extend(std::iter::once(proc_macro2::TokenTree::Group(new_group)));
+                }
+                _ => out.extend(std::iter::once(tt)),
+            }
+        }
+        out
+    }
+
+    fn strip_angles(ts: &TokenStream2) -> TokenStream2 {
+        let toks: Vec<_> = ts.clone().into_iter().collect();
+        if toks.len() < 2 {
+            return TokenStream2::new();
+        }
+        toks[1..toks.len() - 1].iter().cloned().collect()
+    }
+
+    let parent_cascade_invocations: Vec<TokenStream2> = class_attrs
+        .parents
+        .iter()
+        .take(1)
+        .map(|p| {
+            let base_macro = format_ident!("__{}_ancestor_impls", p.base);
+            let inner = strip_angles(&p.generics);
+            let rewritten = rewrite_tpidents(inner, &type_param_idents, &gen_meta_idents);
+            if rewritten.is_empty() {
+                quote! { $crate::#base_macro!($child); }
+            } else {
+                quote! { $crate::#base_macro!($child, #rewritten); }
+            }
+        })
+        .collect();
+
+    let macro_param_slots: Vec<TokenStream2> = gen_meta_idents
+        .iter()
+        .map(|g| quote! { , $#g:ty })
+        .collect();
+
+    let own_trait_impl = if type_param_idents.is_empty() {
+        quote! { impl #trait_ident for $child {} }
+    } else {
+        let gens = gen_meta_idents.iter().map(|g| quote! { $#g });
+        quote! { impl #trait_ident<#(#gens),*> for $child {} }
+    };
+    let own_from_impl = if type_param_idents.is_empty() {
+        quote! {
+            impl ::core::convert::From<$child> for #class_ident {
+                fn from(value: $child) -> Self {
+                    <Self as ::unity2::FromIlInstance>::from_il_instance(
+                        <$child as ::core::convert::Into<::unity2::IlInstance>>::into(value),
+                    )
+                }
+            }
+        }
+    } else {
+        let gens = gen_meta_idents.iter().map(|g| quote! { $#g });
+        quote! {
+            impl ::core::convert::From<$child> for #class_ident<#(#gens),*> {
+                fn from(value: $child) -> Self {
+                    <Self as ::unity2::FromIlInstance>::from_il_instance(
+                        <$child as ::core::convert::Into<::unity2::IlInstance>>::into(value),
+                    )
+                }
+            }
+        }
+    };
+
+    let ancestor_macro_def = quote! {
+        #[doc(hidden)]
+        #[macro_export]
+        macro_rules! #ancestor_macro_ident {
+            ($child:ty #(#macro_param_slots)*) => {
+                #(#parent_cascade_invocations)*
+                #own_trait_impl
+                #own_from_impl
+            };
+        }
+    };
+
+    let parent_invocations_for_self: Vec<TokenStream2> = class_attrs
+        .parents
+        .iter()
+        .map(|p| {
+            let base_macro = format_ident!("__{}_ancestor_impls", p.base);
+            let inner = strip_angles(&p.generics);
+            if inner.is_empty() {
+                quote! { crate::#base_macro!(#class_ident); }
+            } else {
+                quote! { crate::#base_macro!(#class_ident, #inner); }
+            }
+        })
+        .collect();
+
     let (parent_bound, parent_impls) = if class_attrs.parents.is_empty() {
         (quote! { ::unity2::SystemObject }, quote! {})
     } else {
-        if !type_param_idents.is_empty() {
-            return Err(venial::Error::new(
-                "#[unity2::class] does not support `#[parent(...)]` on generic \
-                 child classes yet; instantiate parent relationships manually",
-            ));
-        }
-
-        // First parent entry becomes the direct supertrait bound on the field-accessor trait
-        // The rest are older ancestors, we emit transitive trait and From bridges for each
         let direct = &class_attrs.parents[0];
         let direct_base = &direct.base;
         let direct_generics = &direct.generics;
         let direct_trait_ident = format_ident!("I{}", direct_base);
 
-        let ancestor_impls = class_attrs.parents.iter().map(|p| {
-            let base = &p.base;
-            let generics = &p.generics;
-            let trait_ident = format_ident!("I{}", base);
-            quote! {
-                // Required transitively, ITexture with supertrait IObject means impl ITexture for Texture2D
-                // only type-checks if Texture2D also implements IObject
-                impl #trait_ident #generics for #class_ident {}
-
-                // Upcast, routes through FromIlInstance on the ancestor so each ancestor's
-                // construction logic (PhantomData init for generic parents, plain Self(x) for
-                // non-generic ones) is preserved
-                impl ::core::convert::From<#class_ident> for #base #generics {
-                    fn from(value: #class_ident) -> Self {
-                        <Self as ::unity2::FromIlInstance>::from_il_instance(
-                            <#class_ident as ::core::convert::Into<::unity2::IlInstance>>::into(value),
-                        )
+        let impls = if type_param_idents.is_empty() {
+            quote! { #(#parent_invocations_for_self)* }
+        } else {
+            let generic_ancestor_impls = class_attrs.parents.iter().map(|p| {
+                let base = &p.base;
+                let generics = &p.generics;
+                let trait_ident = format_ident!("I{}", base);
+                quote! {
+                    impl #impl_generics #trait_ident #generics for #class_ident #type_generics {}
+                    impl #impl_generics ::core::convert::From<#class_ident #type_generics>
+                        for #base #generics
+                    {
+                        fn from(value: #class_ident #type_generics) -> Self {
+                            <Self as ::unity2::FromIlInstance>::from_il_instance(
+                                <#class_ident #type_generics as ::core::convert::Into<::unity2::IlInstance>>::into(value),
+                            )
+                        }
                     }
                 }
-            }
-        });
+            });
+            quote! { #(#generic_ancestor_impls)* }
+        };
 
-        (
-            quote! { #direct_trait_ident #direct_generics },
-            quote! {
-                #(#ancestor_impls)*
-            },
-        )
+        (quote! { #direct_trait_ident #direct_generics }, impls)
     };
 
-    // Instance accessors land in IFoo with default-body implementations
     let instance_accessors = fields.iter().filter(|f| !f.is_static).map(|f| {
         let rust_name = &f.name;
         let ty = &f.ty;
@@ -254,7 +358,6 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         let ty = &f.ty;
         let il2cpp_name = &f.il2cpp_name;
 
-        // Inside the generated impl block, Self already carries the class-plus-type-params path
         let resolve_offset = quote! {
             static OFFSET: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
             let __offset = *OFFSET.get_or_init(|| {
@@ -351,6 +454,12 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
             }
         }
 
+        impl #impl_generics ::unity2::IlType for #class_ident #type_generics {
+            fn il_type() -> &'static ::unity2::il2cpp::Il2CppType {
+                &<Self as ::unity2::ClassIdentity>::class().raw()._1.byval_arg
+            }
+        }
+
         #vis trait #trait_ident #impl_generics: #parent_bound {
             #(#instance_accessors)*
         }
@@ -359,6 +468,8 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         #parent_impls
 
         #statics_block
+
+        #ancestor_macro_def
     })
 }
 
@@ -373,9 +484,8 @@ fn parse_fields(
 }
 
 fn enum_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream2> {
-    // Optional namespace and name pair, when both are given the generated impl includes a class()
-    // method so reflection helpers can reach into IL2CPP's metadata, when absent the enum stays
-    // a purely Rust-side type
+    // When both namespace and name are given the generated impl includes a class() method,
+    // otherwise the enum stays purely Rust-side
     let (il2cpp_namespace, il2cpp_name) = if attr.is_empty() {
         (None, None)
     } else {
@@ -464,7 +574,6 @@ fn enum_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream
         .zip(variant_names_str.iter())
         .map(|(name, name_str)| quote! { Self::#name => #name_str, });
 
-    // With namespace and name we emit IL2CPP_NAMESPACE and IL2CPP_NAME constants and a cached class() lookup
     let identity_methods = match (&il2cpp_namespace, &il2cpp_name) {
         (Some(ns), Some(name)) => {
             let ns_lit = ns.as_str();
@@ -540,17 +649,80 @@ fn callback_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
     let fn_name = &func.name;
     let helper_name = format_ident!("{}_method_info", fn_name);
     let static_name = format_ident!("__UNITY2_MI_{}", fn_name);
+    let params_static = format_ident!("__UNITY2_MI_PARAMS_{}", fn_name);
 
-    // IL2CPP parameters_count excludes the implicit target receiver and the trailing MethodInfo* slot
-    let typed_count = func
+    // Drop leading `this`/`_this` (becomes `class` via its Rust type) and the trailing
+    // `method_info`/`_method_info` / `OptionalMethod` hidden arg, neither counts toward
+    // parameters_count or the parameters array
+    let typed_params: Vec<&venial::FnTypedParam> = func
         .params
         .inner
         .iter()
-        .filter(|(p, _)| matches!(p, venial::FnParam::Typed(_)))
-        .count();
-    let parameters_count: u8 = typed_count.saturating_sub(2).min(u8::MAX as usize) as u8;
+        .filter_map(|(p, _)| match p {
+            venial::FnParam::Typed(t) => Some(t),
+            _ => None,
+        })
+        .collect();
 
-    // Built at compile time, the resulting byte-array pointer is stable for the plugin's lifetime
+    let is_receiver = |t: &venial::FnTypedParam| {
+        let n = t.name.to_string();
+        n == "this" || n == "_this"
+    };
+    let is_trailing_method_info = |t: &venial::FnTypedParam| {
+        let n = t.name.to_string();
+        n == "method_info" || n == "_method_info"
+    };
+
+    let receiver_ty: Option<&venial::TypeExpr> = typed_params
+        .first()
+        .filter(|t| is_receiver(t))
+        .map(|t| &t.ty);
+
+    let mut body_params: Vec<&venial::FnTypedParam> = typed_params.iter().copied().collect();
+    if receiver_ty.is_some() {
+        body_params.remove(0);
+    }
+    if body_params.last().map(|t| is_trailing_method_info(t)).unwrap_or(false) {
+        body_params.pop();
+    }
+
+    let parameters_count: u8 = body_params.len().min(u8::MAX as usize) as u8;
+
+    // ParameterInfo entries pull parameter_type from IlType at lazy-init, can't be const
+    // because IL2CPP metadata is only populated after il2cpp_init
+    let param_entries: Vec<TokenStream2> = body_params
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let ty = &t.ty;
+            let raw = t.name.to_string();
+            let bytes: Vec<u8> = raw.trim_start_matches('_').bytes().chain(std::iter::once(0u8)).collect();
+            let lit = proc_macro2::Literal::byte_string(&bytes);
+            let pos = i as i32;
+            quote! {
+                ::unity2::il2cpp::ParameterInfo {
+                    name: (#lit).as_ptr(),
+                    position: #pos,
+                    token: 0,
+                    parameter_type: <#ty as ::unity2::IlType>::il_type(),
+                }
+            }
+        })
+        .collect();
+
+    let return_ty_expr: TokenStream2 = match func.return_ty.as_ref() {
+        Some(t) => {
+            let ty = &t;
+            quote! { <#ty as ::unity2::IlType>::il_type() }
+        }
+        None => quote! { <() as ::unity2::IlType>::il_type() },
+    };
+
+    let class_expr: TokenStream2 = match receiver_ty {
+        Some(ty) => quote! { ::core::option::Option::Some(<#ty as ::unity2::ClassIdentity>::class().raw()) },
+        None => quote! { ::core::option::Option::None },
+    };
+
     let fn_name_c_lit = {
         let s = fn_name.to_string();
         let bytes: Vec<u8> = s.bytes().chain(std::iter::once(0u8)).collect();
@@ -559,6 +731,7 @@ fn callback_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
     };
 
     const METHOD_ATTRIBUTE_STATIC: u16 = 0x0010;
+    let flags: u16 = if receiver_ty.is_some() { 0 } else { METHOD_ATTRIBUTE_STATIC };
 
     // The MethodInfo lives as a plain `static` in the plugin's binary, no heap allocation, no
     // leak, no runtime init, every field is const-initializable and the record sits in .rodata
@@ -568,26 +741,31 @@ fn callback_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
         #func
 
         #[allow(non_upper_case_globals)]
-        static #static_name: ::unity2::MethodInfo = ::unity2::MethodInfo {
-            method_ptr: #fn_name as *mut u8,
-            invoker_method: ::core::ptr::null(),
-            name: (#fn_name_c_lit).as_ptr(),
-            class: ::core::option::Option::None,
-            return_type: ::core::ptr::null(),
-            parameters: ::core::ptr::null(),
-            info_or_definition: ::core::ptr::null(),
-            generic_method_or_container: ::core::ptr::null(),
-            token: 0,
-            flags: #METHOD_ATTRIBUTE_STATIC,
-            iflags: 0,
-            slot: 0,
-            parameters_count: #parameters_count,
-            bitflags: 0,
-        };
+        static #params_static: ::std::sync::LazyLock<[::unity2::il2cpp::ParameterInfo; #parameters_count as usize]> =
+            ::std::sync::LazyLock::new(|| [#(#param_entries),*]);
+
+        #[allow(non_upper_case_globals)]
+        static #static_name: ::std::sync::LazyLock<::unity2::MethodInfo> =
+            ::std::sync::LazyLock::new(|| ::unity2::MethodInfo {
+                method_ptr: #fn_name as *mut u8,
+                invoker_method: ::core::ptr::null(),
+                name: (#fn_name_c_lit).as_ptr(),
+                class: #class_expr,
+                return_type: #return_ty_expr as *const _ as *const u8,
+                parameters: (&*#params_static).as_ptr(),
+                info_or_definition: ::core::ptr::null(),
+                generic_method_or_container: ::core::ptr::null(),
+                token: 0,
+                flags: #flags,
+                iflags: 0,
+                slot: u16::MAX,
+                parameters_count: #parameters_count,
+                bitflags: 0,
+            });
 
         #[allow(non_snake_case)]
         fn #helper_name() -> &'static ::unity2::MethodInfo {
-            &#static_name
+            &*#static_name
         }
     })
 }
@@ -807,14 +985,9 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
         }
     }
 
-    // Generic impl blocks route through a trait-based pattern so children inherit parent methods,
-    // the ergonomic equivalent of C# static method inheritance (PersonData.UnsafeGet works because
-    // it's declared on StructData<T>), offset and pattern and vtable resolutions are rejected,
-    // they bind a fixed function pointer and can't carry the per-instantiation MethodInfo
-    //
-    // Emitted shape,
-    //   pub trait I{Base}Methods<T: ClassIdentity>: ClassIdentity { fn foo(..) -> T { ... } }
-    //   impl<T, __U: I{Base}<T> + ClassIdentity> I{Base}Methods<T> for __U {}
+    // Generic impl blocks route through a trait so children inherit parent methods, offset
+    // / pattern / vtable resolutions are rejected, they bind a fixed function pointer and
+    // can't carry a per-instantiation MethodInfo
     if let Some(impl_generics) = impl_block.impl_generic_params.as_ref() {
         for m in &methods {
             if !matches!(m.resolution, Resolution::Name { .. }) {
@@ -854,8 +1027,8 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
                 #(#method_defaults)*
             }
 
-            // Blanket, any type that implements the parent's field-accessor trait AND
-            // ClassIdentity inherits the methods trait
+            // Any type implementing the parent's field-accessor trait plus ClassIdentity
+            // inherits the methods trait
             impl<
                 #(#type_param_idents: ::unity2::ClassIdentity,)*
                 __U: #field_trait_ident<#(#type_param_idents),*> + ::unity2::ClassIdentity
@@ -872,8 +1045,6 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
         let name = &m.name;
         let lookup_mod_ident = format_ident!("__lookup_{}", name);
 
-        // Build the raw extern fn attribute plus the optional sibling lookup submodule for
-        // resolution kinds that need a runtime offset
         let (raw_attr, lookup_mod) = match &m.resolution {
             Resolution::Offset(lit) => (
                 quote! { #[::skyline::from_offset(#lit)] },
@@ -980,8 +1151,8 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
             #lookup_mod
 
             #raw_attr
-            // Hygienic name for the implicit trailing MethodInfo* slot so users can declare
-            // their own `method_info` params on methods taking *const MethodInfo
+            // Hygienic name for the trailing MethodInfo* slot so users can still declare
+            // their own `method_info` param on methods taking *const MethodInfo
             pub fn #name(#receiver #(#typed_params,)* __unity2_method_info: ::unity2::OptionalMethod) #ret;
         }
     });
@@ -1029,9 +1200,8 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
     })
 }
 
-// Used to skip `impl Into<T>` coercion on params whose type contains a reference, anonymous
-// lifetimes inside impl Trait aren't stable, and adding explicit lifetime params would force
-// the wrapper signature to grow noise
+// Skips `impl Into<T>` coercion on reference-typed params, anonymous lifetimes inside
+// impl Trait aren't stable and explicit lifetimes would bloat the wrapper signature
 fn type_has_reference(ty: &venial::TypeExpr) -> bool {
     ty.tokens.iter().any(|tt| match tt {
         proc_macro2::TokenTree::Punct(p) => p.as_char() == '&',
@@ -1039,21 +1209,8 @@ fn type_has_reference(ty: &venial::TypeExpr) -> bool {
     })
 }
 
-fn method_info_expr(m: &Method, raw_mod: &proc_macro2::Ident) -> TokenStream2 {
-    let lookup_mod_ident = format_ident!("__lookup_{}", m.name);
-    match m.resolution {
-        Resolution::Name { .. } | Resolution::VtableIndex(_) => quote! {
-            ::core::option::Option::Some(unsafe {
-                ::core::mem::transmute::<
-                    &'static ::unity2::il2cpp::MethodInfo,
-                    &'static (),
-                >(#raw_mod::#lookup_mod_ident::get_method_info())
-            })
-        },
-        Resolution::Offset(_) | Resolution::Pattern(_) => quote! {
-            ::core::option::Option::None
-        },
-    }
+fn method_info_expr(_m: &Method, _raw_mod: &proc_macro2::Ident) -> TokenStream2 {
+    quote! { ::core::option::Option::None }
 }
 
 fn build_static_wrapper(m: &Method, raw_mod: &proc_macro2::Ident) -> TokenStream2 {
@@ -1098,9 +1255,8 @@ fn build_static_wrapper(m: &Method, raw_mod: &proc_macro2::Ident) -> TokenStream
     }
 }
 
-// Converts &T or &mut T to *const T or *mut T, same ABI, avoids higher-ranked lifetimes that
-// break MethodSignature inference, the macro casts at the call site so the Rust-facing
-// signature keeps the reference for ergonomics
+// Converts &T/&mut T to *const T/*mut T (same ABI), avoids higher-ranked lifetimes that
+// break MethodSignature inference, cast happens at the call site
 fn reference_to_raw_pointer(ty: &venial::TypeExpr) -> (proc_macro2::TokenStream, bool) {
     let mut iter = ty.tokens.iter().peekable();
     let Some(proc_macro2::TokenTree::Punct(p)) = iter.peek() else {
@@ -1138,11 +1294,6 @@ fn reference_to_raw_pointer(ty: &venial::TypeExpr) -> (proc_macro2::TokenStream,
     (quote! { #ptr_kind #inner }, true)
 }
 
-// Default body routes through runtime Class::method::<Sig> lookup, the cache stores only
-// (method_ptr as usize, &'static MethodInfo), neither leg mentions outer generics, so the
-// static OnceLock is accepted, the fn(...) signature materializes only as a local binding
-// at call time where outer generics are allowed, unlike the static-offset path this does
-// NOT apply impl Into<T> coercion, the extern "C" fn we transmute to has fixed types
 fn build_generic_trait_default(m: &Method) -> TokenStream2 {
     let name = &m.name;
 
@@ -1152,8 +1303,7 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
     };
     let il2cpp_name_lit = il2cpp_name.as_str();
 
-    // Rust-facing signature keeps &mut V for ergonomics, Sig and extern fn types use raw
-    // pointers, same ABI, no higher-ranked lifetimes, reference params are cast at the call site
+    // Rust-facing signature keeps &mut V, Sig and extern fn use raw pointers (same ABI)
     let typed_params = m.params.iter().map(|p| {
         let pname = &p.name;
         let pty = &p.ty;
@@ -1222,7 +1372,6 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
     let receiver = if m.is_static {
         quote! {}
     } else {
-        // The Self Sized bound keeps the trait object-safe when it has no instance methods
         quote! { self, }
     };
     let sized_bound = if m.is_static {
