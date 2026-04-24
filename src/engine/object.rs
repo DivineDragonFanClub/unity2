@@ -14,22 +14,22 @@ pub struct Object {}
 #[unity2::methods]
 impl Object {
     #[method(name = "get_name")]
-    fn name(self) -> Il2CppString;
+    pub fn name(self) -> Il2CppString;
 
     #[method(name = "set_name")]
-    fn set_name(self, value: Il2CppString);
+    pub fn set_name(self, value: Il2CppString);
 
     #[method(name = "GetInstanceID")]
-    fn get_instance_id(self) -> i32;
+    pub fn get_instance_id(self) -> i32;
 
     #[method(name = "Destroy", args = 1)]
-    fn destroy(target: Object);
+    pub fn destroy(target: Object);
 
     #[method(name = "DestroyImmediate", args = 1)]
-    fn destroy_immediate(target: Object);
+    pub fn destroy_immediate(target: Object);
 
     #[method(name = "DontDestroyOnLoad")]
-    fn dont_destroy_on_load(target: Object);
+    pub fn dont_destroy_on_load(target: Object);
 }
 
 #[unity2::class(namespace = "UnityEngine")]
@@ -39,31 +39,31 @@ pub struct GameObject {}
 #[unity2::methods]
 impl GameObject {
     #[method(name = "get_transform")]
-    fn transform(self) -> Transform;
+    pub fn transform(self) -> Transform;
 
     #[method(name = "get_activeSelf")]
-    fn active_self(self) -> bool;
+    pub fn active_self(self) -> bool;
 
     #[method(name = "get_activeInHierarchy")]
-    fn active_in_hierarchy(self) -> bool;
+    pub fn active_in_hierarchy(self) -> bool;
 
     #[method(name = "SetActive")]
-    fn set_active(self, value: bool);
+    pub fn set_active(self, value: bool);
 
     #[method(name = "get_layer")]
-    fn layer(self) -> i32;
+    pub fn layer(self) -> i32;
 
     #[method(name = "set_layer")]
-    fn set_layer(self, value: i32);
+    pub fn set_layer(self, value: i32);
 
     #[method(name = "get_tag")]
-    fn tag(self) -> Il2CppString;
+    pub fn tag(self) -> Il2CppString;
 
     #[method(name = "set_tag")]
-    fn set_tag(self, value: Il2CppString);
+    pub fn set_tag(self, value: Il2CppString);
 
     #[method(name = "Find")]
-    fn find(name: Il2CppString) -> GameObject;
+    pub fn find(name: Il2CppString) -> GameObject;
 }
 
 #[unity2::class(namespace = "UnityEngine")]
@@ -73,10 +73,10 @@ pub struct Component {}
 #[unity2::methods]
 impl Component {
     #[method(name = "get_gameObject")]
-    fn game_object(self) -> GameObject;
+    pub fn game_object(self) -> GameObject;
 
     #[method(name = "get_transform")]
-    fn transform(self) -> Transform;
+    pub fn transform(self) -> Transform;
 }
 
 #[unity2::class(namespace = "UnityEngine")]
@@ -86,49 +86,55 @@ pub struct Transform {}
 #[unity2::methods]
 impl Transform {
     #[method(name = "get_position")]
-    fn position(self) -> Vector3;
+    pub fn position(self) -> Vector3;
 
     #[method(name = "set_position")]
-    fn set_position(self, value: Vector3);
+    pub fn set_position(self, value: Vector3);
 
     #[method(name = "get_localPosition")]
-    fn local_position(self) -> Vector3;
+    pub fn local_position(self) -> Vector3;
 
     #[method(name = "set_localPosition")]
-    fn set_local_position(self, value: Vector3);
+    pub fn set_local_position(self, value: Vector3);
 
     #[method(name = "get_rotation")]
-    fn rotation(self) -> Quaternion;
+    pub fn rotation(self) -> Quaternion;
 
     #[method(name = "set_rotation")]
-    fn set_rotation(self, value: Quaternion);
+    pub fn set_rotation(self, value: Quaternion);
 
     #[method(name = "get_localRotation")]
-    fn local_rotation(self) -> Quaternion;
+    pub fn local_rotation(self) -> Quaternion;
 
     #[method(name = "set_localRotation")]
-    fn set_local_rotation(self, value: Quaternion);
+    pub fn set_local_rotation(self, value: Quaternion);
 
     #[method(name = "get_localScale")]
-    fn local_scale(self) -> Vector3;
+    pub fn local_scale(self) -> Vector3;
 
     #[method(name = "set_localScale")]
-    fn set_local_scale(self, value: Vector3);
+    pub fn set_local_scale(self, value: Vector3);
+
+    #[method(name = "get_localEulerAngles")]
+    pub fn local_euler_angles(self) -> Vector3;
+
+    #[method(name = "set_localEulerAngles")]
+    pub fn set_local_euler_angles(self, value: Vector3);
 
     #[method(name = "get_parent")]
-    fn parent(self) -> Transform;
+    pub fn parent(self) -> Transform;
 
     #[method(name = "SetParent", args = 1)]
-    fn set_parent(self, parent: Transform);
+    pub fn set_parent(self, parent: Transform);
 
     #[method(name = "get_childCount")]
-    fn child_count(self) -> i32;
+    pub fn child_count(self) -> i32;
 
     #[method(name = "GetChild")]
-    fn get_child(self, index: i32) -> Transform;
+    pub fn get_child(self, index: i32) -> Transform;
 
     #[method(name = "Find")]
-    fn find(self, name: Il2CppString) -> Transform;
+    pub fn find(self, name: Il2CppString) -> Transform;
 }
 
 #[unity2::class(namespace = "UnityEngine")]

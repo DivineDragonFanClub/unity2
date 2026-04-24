@@ -9,7 +9,9 @@ pub mod vector;
 pub use bundle::{AssetBundle, AssetBundleCreateRequest};
 pub use color::{Color, Color32};
 pub use object::{
-    Behaviour, Component, FilterMode, GameObject, ImageConversion, Material, MonoBehaviour, Object,
+    Behaviour, Component, FilterMode, GameObject, IBehaviourMethods, IComponentMethods,
+    IGameObjectMethods, IMaterialMethods, ImageConversion, IObjectMethods, ISpriteMethods,
+    ITexture2DMethods, ITextureMethods, ITransformMethods, Material, MonoBehaviour, Object,
     ScriptableObject, Sprite, SpriteMeshType, Texture, Texture2D, Transform,
 };
 pub use rendering::ColorUtils;
