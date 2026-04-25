@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use proc_macro2::{Delimiter, Ident, Literal, Spacing, Span, TokenStream, TokenTree};
+use proc_macro2::{Ident, Literal, Span, TokenStream, TokenTree};
 use quote::ToTokens;
 
 use super::{bail, error, ident, is_punct, path_is_single};
@@ -293,10 +293,6 @@ impl KvValue {
         Self { tokens }
     }
 
-    pub fn into_tokens(self) -> Vec<TokenTree> {
-        self.tokens
-    }
-
     pub fn expr(self) -> ParseResult<TokenStream> {
         Ok(self.tokens.into_iter().collect())
     }
@@ -315,50 +311,6 @@ impl KvValue {
             tt => {
                 bail!(tt, "expected identifier")
             }
-        }
-    }
-
-    pub fn as_key_value(&self) -> ParseResult<(Ident, Self)> {
-        if self.tokens.len() < 3 {
-            return bail!(&self.tokens[0], "expected `key = expression`");
-        }
-
-        let key = match &self.tokens[0] {
-            TokenTree::Ident(id) => id.clone(),
-            other => return bail!(other, "expected identifier"),
-        };
-
-        let has_equals = match &self.tokens[1] {
-            TokenTree::Punct(punct) => punct.as_char() == '=' && punct.spacing() == Spacing::Alone,
-            _ => false,
-        };
-
-        if !has_equals {
-            return bail!(&self.tokens[1], "expected `=`");
-        }
-
-        Ok((key, Self::new(self.tokens[2..].into())))
-    }
-
-    pub fn as_ident(&self) -> ParseResult<Ident> {
-        if self.tokens.len() > 1 {
-            return bail!(&self.tokens[1], "expected a single identifier");
-        }
-
-        match &self.tokens[0] {
-            TokenTree::Ident(id) => Ok(id.clone()),
-            other => bail!(other, "expected identifier"),
-        }
-    }
-
-    pub fn as_literal(&self) -> ParseResult<Literal> {
-        if self.tokens.len() > 1 {
-            return bail!(&self.tokens[1], "expected a single literal");
-        }
-
-        match &self.tokens[0] {
-            TokenTree::Literal(literal) => Ok(literal.clone()),
-            other => bail!(other, "expected literal"),
         }
     }
 }

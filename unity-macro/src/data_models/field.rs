@@ -1,5 +1,4 @@
-use proc_macro2::{Ident, Span};
-use quote::ToTokens;
+use proc_macro2::Ident;
 
 use crate::ParseResult;
 use crate::util::KvParser;
@@ -12,7 +11,6 @@ pub struct Field {
     pub readonly: bool,
     // `static` is a Rust keyword so the marker is #[static_field] instead
     pub is_static: bool,
-    pub span: Span,
 }
 
 impl Field {
@@ -66,12 +64,6 @@ impl Field {
             il2cpp_name,
             readonly,
             is_static,
-            span: field
-                .to_token_stream()
-                .into_iter()
-                .next()
-                .map(|tt| tt.span())
-                .unwrap_or_else(Span::call_site),
         })
     }
 }
