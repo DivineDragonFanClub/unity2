@@ -409,8 +409,43 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
     let namespace_lit = class_attrs.namespace.as_deref().unwrap_or("");
     let class_name_lit = class_attrs.name.as_str();
 
+    // Build doc lines summarizing IL2CPP namespace + parent chain so rustdoc shows hierarchy
+    let il2cpp_qualified = if namespace_lit.is_empty() {
+        class_name_lit.to_string()
+    } else {
+        format!("{}.{}", namespace_lit, class_name_lit)
+    };
+    let inheritance_doc_lines: Vec<String> = {
+        // Double-backtick so generic IL2CPP names like `ProcSceneSequence`1` render correctly
+        let mut lines = vec![
+            String::new(),
+            format!("IL2CPP class: ``{}``", il2cpp_qualified),
+        ];
+        if !class_attrs.parents.is_empty() {
+            let chain = class_attrs
+                .parents
+                .iter()
+                .map(|p| {
+                    let generics = p.generics.to_string().replace(' ', "");
+                    if generics.is_empty() {
+                        format!("``{}``", p.base)
+                    } else {
+                        format!("``{}{}``", p.base, generics)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" : ");
+            lines.push(format!("Inherits: {}", chain));
+        }
+        lines
+    };
+    let inheritance_docs = inheritance_doc_lines
+        .iter()
+        .map(|line| quote! { #[doc = #line] });
+
     Ok(quote! {
         #(#passthrough_attrs)*
+        #(#inheritance_docs)*
         #[repr(transparent)]
         #[derive(::core::clone::Clone, ::core::marker::Copy)]
         #vis struct #class_ident #impl_generics(::unity2::IlInstance #phantom_field_decl);

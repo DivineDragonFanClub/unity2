@@ -1,7 +1,6 @@
 use std::sync::OnceLock;
 
 use crate::il2cpp::{api, FieldInfo, Il2CppClass, MethodInfo, PropertyInfo};
-use crate::method::Method;
 use crate::system::SystemType;
 use crate::{Array, ClassIdentity};
 
