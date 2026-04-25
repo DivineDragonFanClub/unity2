@@ -3,6 +3,11 @@ use std::marker::PhantomData;
 use crate::class::Class;
 use crate::il2cpp::MethodInfo;
 
+/// # Safety
+///
+/// Caller must ensure that `method_info.invoker_method` is non-null and matches the
+/// signature `R, this, args` expected by the IL2CPP invoker thunk. `args.len()` must
+/// equal `method_info.parameters_count`, and each pointer in `args` must outlive the call.
 pub unsafe fn invoke_via_invoker<R: Copy>(
     method_info: &'static MethodInfo,
     this: *const (),
@@ -105,6 +110,7 @@ macro_rules! impl_method {
 
         impl<$($a,)* R> Method<fn($($a),*) -> R> {
             #[inline]
+            #[allow(clippy::too_many_arguments)]
             pub fn call(self $(, $arg: $a)*) -> R {
                 let f: extern "C" fn($($a,)* Option<&'static MethodInfo>) -> R =
                     unsafe { std::mem::transmute(self.method_ptr) };

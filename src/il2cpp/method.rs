@@ -38,6 +38,12 @@ pub struct ParameterInfo {
 unsafe impl Send for ParameterInfo {}
 unsafe impl Sync for ParameterInfo {}
 
+impl Default for MethodInfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MethodInfo {
     pub fn new() -> Self {
         unsafe { ::core::mem::zeroed() }

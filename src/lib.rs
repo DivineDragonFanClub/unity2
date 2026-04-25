@@ -21,7 +21,7 @@ pub fn method_info_for_fn(method_ptr: *mut u8, parameters_count: u8) -> &'static
 
     let mut guard = CACHE.lock().unwrap();
     let map = guard.get_or_insert_with(HashMap::new);
-    *map.entry(method_ptr as usize).or_insert_with(|| {
+    map.entry(method_ptr as usize).or_insert_with(|| {
         let mi = Box::leak(Box::new(MethodInfo::new()));
         mi.method_ptr = method_ptr;
         mi.parameters_count = parameters_count;
@@ -217,6 +217,10 @@ pub trait Cast: SystemObject {
         }
     }
 
+    /// # Safety
+    ///
+    /// Caller must guarantee that `self` is actually an instance of `T` (or a subtype).
+    /// Skips the runtime class check that [`try_cast`](Self::try_cast) performs.
     #[inline]
     unsafe fn cast<T: ClassIdentity + FromIlInstance>(self) -> T {
         T::from_il_instance(self.as_instance())
@@ -515,7 +519,8 @@ pub fn object_get_class<'a>(obj: impl SystemObject) -> &'a Il2CppClass {
 pub fn il2cpp_enum_names(enum_class: Class) -> Option<Vec<String>> {
     use std::sync::OnceLock;
 
-    static GET_NAMES: OnceLock<Method<fn(system::SystemType) -> Array<Il2CppString>>> = OnceLock::new();
+    type GetNamesFn = fn(system::SystemType) -> Array<Il2CppString>;
+    static GET_NAMES: OnceLock<Method<GetNamesFn>> = OnceLock::new();
 
     let get_names = *GET_NAMES.get_or_init(|| {
         Class::lookup("System", "Enum")

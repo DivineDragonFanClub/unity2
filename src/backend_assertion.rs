@@ -1,3 +1,4 @@
+#[allow(clippy::identity_op)]
 const BACKEND_COUNT: usize = 0
     + cfg!(feature = "fe-engage") as usize
     ;

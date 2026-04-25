@@ -31,9 +31,8 @@ impl Class {
                 .iter()
                 .find(|nt| nt.get_name() == inner)
                 .map(|&c| Self::from_raw(c))
-                .map(|class| {
+                .inspect(|class| {
                     unsafe { api::class_init(class.raw()) };
-                    class
                 })
                 .ok_or_else(|| crate::Il2CppError::MissingClass {
                     namespace: namespace.to_string(),
@@ -42,9 +41,8 @@ impl Class {
         }
         Il2CppClass::from_name(namespace, name)
             .map(|c| Self::from_raw(c))
-            .map(|class| {
+            .inspect(|class| {
                 unsafe { api::class_init(class.raw()) };
-                class
             })
             .ok_or_else(|| crate::Il2CppError::MissingClass {
                 namespace: namespace.to_string(),

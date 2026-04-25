@@ -1224,7 +1224,7 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
 
     Ok(quote! {
         #[doc(hidden)]
-        #[allow(non_snake_case, non_camel_case_types)]
+        #[allow(non_snake_case, non_camel_case_types, clippy::too_many_arguments)]
         mod #raw_module_ident {
             use super::*;
             #(#raw_items)*
