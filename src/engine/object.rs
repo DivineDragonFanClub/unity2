@@ -144,13 +144,13 @@ pub struct Behaviour {}
 #[unity2::methods]
 impl Behaviour {
     #[method(name = "get_enabled")]
-    fn enabled(self) -> bool;
+    pub fn enabled(self) -> bool;
 
     #[method(name = "set_enabled")]
-    fn set_enabled(self, value: bool);
+    pub fn set_enabled(self, value: bool);
 
     #[method(name = "get_isActiveAndEnabled")]
-    fn is_active_and_enabled(self) -> bool;
+    pub fn is_active_and_enabled(self) -> bool;
 }
 
 #[unity2::class(namespace = "UnityEngine")]
@@ -168,19 +168,19 @@ pub struct Material {}
 #[unity2::methods]
 impl Material {
     #[method(name = "get_color")]
-    fn color(self) -> Color;
+    pub fn color(self) -> Color;
 
     #[method(name = "set_color")]
-    fn set_color(self, value: Color);
+    pub fn set_color(self, value: Color);
 
     #[method(name = "get_mainTexture")]
-    fn main_texture(self) -> Texture;
+    pub fn main_texture(self) -> Texture;
 
     #[method(name = "set_mainTexture")]
-    fn set_main_texture(self, value: Texture);
+    pub fn set_main_texture(self, value: Texture);
 
     #[method(name = "HasProperty")]
-    fn has_property(self, name: Il2CppString) -> bool;
+    pub fn has_property(self, name: Il2CppString) -> bool;
 }
 
 #[unity2::enumeration(namespace = "UnityEngine", name = "FilterMode")]

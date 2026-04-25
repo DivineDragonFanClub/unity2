@@ -217,7 +217,6 @@ pub trait Cast: SystemObject {
         }
     }
 
-    // Caller swears the runtime class is T or a subclass, fields and methods read garbage otherwise
     #[inline]
     unsafe fn cast<T: ClassIdentity + FromIlInstance>(self) -> T {
         T::from_il_instance(self.as_instance())
@@ -377,13 +376,13 @@ impl<T: Copy> Array<T> {
     }
 
     #[inline]
-    pub fn as_slice<'a>(&'a self) -> &'a [T] {
+    pub fn as_slice(&self) -> &[T] {
         assert!(!self.is_null(), "Array::as_slice on null array");
         unsafe { ::core::slice::from_raw_parts(self.items(), self.max_length()) }
     }
 
     #[inline]
-    pub fn as_mut_slice<'a>(&'a mut self) -> &'a mut [T] {
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
         assert!(!self.is_null(), "Array::as_mut_slice on null array");
         unsafe { ::core::slice::from_raw_parts_mut(self.items() as *mut T, self.max_length()) }
     }
