@@ -236,8 +236,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
             let prefix = if p.path_prefix.is_empty() {
                 quote! { $crate:: }
             } else {
-                let pp = &p.path_prefix;
-                quote! { #pp }
+                p.macro_path_prefix()
             };
             if rewritten.is_empty() {
                 quote! { #prefix #base_macro!($child); }
@@ -302,8 +301,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
             let use_path = if p.path_prefix.is_empty() {
                 quote! { crate:: }
             } else {
-                let pp = &p.path_prefix;
-                quote! { #pp }
+                p.macro_path_prefix()
             };
             let alias = format_ident!("__unity2_anchor_{}_for_{}", p.base, class_ident);
             if inner.is_empty() {

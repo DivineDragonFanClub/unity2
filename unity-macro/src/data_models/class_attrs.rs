@@ -17,6 +17,33 @@ pub struct ParentType {
     pub generics: TokenStream,
 }
 
+impl ParentType {
+    pub fn macro_path_prefix(&self) -> TokenStream {
+        let toks: Vec<TokenTree> = self.path_prefix.clone().into_iter().collect();
+        let mut out: Vec<TokenTree> = Vec::new();
+        let mut i = 0;
+        let is_colon = |t: Option<&TokenTree>| {
+            matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == ':')
+        };
+        if is_colon(toks.get(0)) && is_colon(toks.get(1)) {
+            out.push(toks[0].clone());
+            out.push(toks[1].clone());
+            i = 2;
+        }
+        if matches!(toks.get(i), Some(TokenTree::Ident(_))) {
+            out.push(toks[i].clone());
+            i += 1;
+        } else {
+            return out.into_iter().collect();
+        }
+        if is_colon(toks.get(i)) && is_colon(toks.get(i + 1)) {
+            out.push(toks[i].clone());
+            out.push(toks[i + 1].clone());
+        }
+        out.into_iter().collect()
+    }
+}
+
 // Walks the struct attributes for a single #[parent(...)] chain
 pub fn parse_parent_attr(attributes: &[venial::Attribute]) -> ParseResult<Vec<ParentType>> {
     let mut found: Option<Vec<ParentType>> = None;
@@ -38,7 +65,7 @@ pub fn parse_parent_attr(attributes: &[venial::Attribute]) -> ParseResult<Vec<Pa
         let mut in_generics = false;
         let mut depth: i32 = 0;
 
-        let mut finalize = |path_tokens: &mut Vec<TokenTree>,
+        let finalize = |path_tokens: &mut Vec<TokenTree>,
                             current_base: &mut Option<Ident>,
                             current_generics: &mut TokenStream,
                             entries: &mut Vec<ParentType>|
