@@ -42,6 +42,10 @@ impl SystemType {
         (!st.0.is_null()).then_some(st)
     }
 
+    pub fn of<T: ClassIdentity>() -> Option<Self> {
+        Self::from_il2cpp_type(T::class().raw().get_type())
+    }
+
     #[inline]
     pub fn is_null(self) -> bool {
         self.0.is_null()

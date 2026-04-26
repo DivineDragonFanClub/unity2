@@ -130,7 +130,6 @@ impl Class {
         T::class()
     }
 
-    // GC-managed class clone, instances pointing at the clone via klass keep it alive
     pub fn clone_for_override(self) -> Class {
         // Class header ends at 0x138, vtable entries follow, 16 bytes each
         const HEADER_SIZE: usize = 0x138;
@@ -140,9 +139,8 @@ impl Class {
         let size = HEADER_SIZE + VIRTUAL_INVOKE_SIZE * src._2.vtable_count as usize;
 
         unsafe {
-            // kind = 0 is Normal scanned allocation
-            let dest = crate::il2cpp::api::gc_malloc_kind(size, 0);
-
+            let layout = ::std::alloc::Layout::from_size_align(size, 8).unwrap();
+            let dest = ::std::alloc::alloc(layout);
             ::core::ptr::copy_nonoverlapping(
                 src as *const Il2CppClass as *const u8,
                 dest,

@@ -64,6 +64,9 @@ impl GameObject {
 
     #[method(name = "Find")]
     pub fn find(name: Il2CppString) -> GameObject;
+
+    #[method(offset = 0x2C4DEE0)]
+    pub fn get_components(self, ty: crate::SystemType) -> crate::Array<Component>;
 }
 
 #[unity2::class(namespace = "UnityEngine")]

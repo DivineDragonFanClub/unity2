@@ -11,8 +11,8 @@ pub struct ClassAttrs {
     pub parents: Vec<ParentType>,
 }
 
-// base is the leading ident, generics is any trailing tokens (e.g. <PersonData>)
 pub struct ParentType {
+    pub path_prefix: TokenStream,
     pub base: Ident,
     pub generics: TokenStream,
 }
@@ -32,49 +32,95 @@ pub fn parse_parent_attr(attributes: &[venial::Attribute]) -> ParseResult<Vec<Pa
 
         let tokens = attr.value.get_value_tokens();
         let mut entries: Vec<ParentType> = Vec::new();
+        let mut path_tokens: Vec<TokenTree> = Vec::new();
         let mut current_base: Option<Ident> = None;
         let mut current_generics: TokenStream = TokenStream::new();
+        let mut in_generics = false;
         let mut depth: i32 = 0;
 
+        let mut finalize = |path_tokens: &mut Vec<TokenTree>,
+                            current_base: &mut Option<Ident>,
+                            current_generics: &mut TokenStream,
+                            entries: &mut Vec<ParentType>|
+         -> ParseResult<()> {
+            let base = current_base.take().ok_or_else(|| {
+                venial::Error::new("#[parent(...)] entry is missing a type")
+            })?;
+            entries.push(ParentType {
+                path_prefix: std::mem::take(path_tokens).into_iter().collect(),
+                base,
+                generics: std::mem::take(current_generics),
+            });
+            Ok(())
+        };
+
         for tt in tokens.iter() {
+            if in_generics {
+                match tt {
+                    TokenTree::Punct(p) if p.as_char() == '<' => {
+                        depth += 1;
+                        current_generics.extend(std::iter::once(tt.clone()));
+                    }
+                    TokenTree::Punct(p) if p.as_char() == '>' => {
+                        depth -= 1;
+                        current_generics.extend(std::iter::once(tt.clone()));
+                        if depth == 0 {
+                            in_generics = false;
+                        }
+                    }
+                    _ => current_generics.extend(std::iter::once(tt.clone())),
+                }
+                continue;
+            }
+
             match tt {
-                TokenTree::Punct(p) if p.as_char() == ',' && depth == 0 => {
-                    let base = current_base.take().ok_or_else(|| {
-                        venial::Error::new("#[parent(...)] entry is missing a type")
-                    })?;
-                    entries.push(ParentType {
-                        base,
-                        generics: std::mem::take(&mut current_generics),
-                    });
+                TokenTree::Punct(p) if p.as_char() == ',' => {
+                    finalize(
+                        &mut path_tokens,
+                        &mut current_base,
+                        &mut current_generics,
+                        &mut entries,
+                    )?;
                 }
                 TokenTree::Punct(p) if p.as_char() == '<' => {
-                    depth += 1;
+                    depth = 1;
+                    in_generics = true;
                     current_generics.extend(std::iter::once(tt.clone()));
                 }
-                TokenTree::Punct(p) if p.as_char() == '>' => {
-                    depth -= 1;
-                    current_generics.extend(std::iter::once(tt.clone()));
+                TokenTree::Punct(p) if p.as_char() == ':' => {
+                    if let Some(prev) = current_base.take() {
+                        path_tokens.push(TokenTree::Ident(prev));
+                    }
+                    path_tokens.push(tt.clone());
                 }
-                TokenTree::Ident(id) if current_base.is_none() => {
+                TokenTree::Ident(id) => {
+                    if let Some(prev) = current_base.take() {
+                        return bail!(
+                            tt,
+                            "#[parent(...)] expected `::` between path segments, got `{} {}`",
+                            prev,
+                            id,
+                        );
+                    }
                     current_base = Some(id.clone());
                 }
                 _ => {
-                    if current_base.is_none() {
-                        return bail!(
-                            tt,
-                            "#[parent(...)] entry must start with a Rust type ident",
-                        );
-                    }
-                    current_generics.extend(std::iter::once(tt.clone()));
+                    return bail!(
+                        tt,
+                        "#[parent(...)] entry must be a path like `Foo`, \
+                         `unity2::Foo`, or `::unity2::Foo<T>`",
+                    );
                 }
             }
         }
 
-        if let Some(base) = current_base {
-            entries.push(ParentType {
-                base,
-                generics: current_generics,
-            });
+        if current_base.is_some() {
+            finalize(
+                &mut path_tokens,
+                &mut current_base,
+                &mut current_generics,
+                &mut entries,
+            )?;
         }
 
         if entries.is_empty() {

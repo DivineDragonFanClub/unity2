@@ -126,15 +126,19 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         }
     }
 
-    let (phantom_field_decl, phantom_init, class_lookup_body) = if type_param_idents.is_empty() {
+    let (phantom_field_decl, phantom_init, class_resolver) = if type_param_idents.is_empty() {
         (
             quote! {},
             quote! {},
             quote! {
-                ::unity2::Class::lookup(
-                    <Self as ::unity2::ClassIdentity>::NAMESPACE,
-                    <Self as ::unity2::ClassIdentity>::NAME,
-                )
+                static CACHE: ::std::sync::OnceLock<::unity2::Class> =
+                    ::std::sync::OnceLock::new();
+                *CACHE.get_or_init(|| {
+                    ::unity2::Class::lookup(
+                        <Self as ::unity2::ClassIdentity>::NAMESPACE,
+                        <Self as ::unity2::ClassIdentity>::NAME,
+                    )
+                })
             },
         )
     } else {
@@ -143,19 +147,37 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
             quote! { , ::core::marker::PhantomData<fn() -> (#(#type_args,)*)> },
             quote! { , ::core::marker::PhantomData },
             quote! {
-                ::unity2::Class::lookup(
-                    <Self as ::unity2::ClassIdentity>::NAMESPACE,
-                    <Self as ::unity2::ClassIdentity>::NAME,
-                )
-                .make_generic(&[
-                    #(<#type_args as ::unity2::ClassIdentity>::class()),*
-                ])
-                .unwrap_or_else(|| panic!(
-                    "{}",
-                    ::unity2::Il2CppError::FailedGenericInstantiation {
-                        class: ::core::stringify!(#class_ident).to_string(),
-                    }
-                ))
+                static CACHE: ::std::sync::OnceLock<
+                    ::std::sync::Mutex<
+                        ::std::collections::HashMap<u64, ::unity2::Class>,
+                    >,
+                > = ::std::sync::OnceLock::new();
+                use ::std::hash::{Hash as _, Hasher as _};
+                let mut __h = ::std::collections::hash_map::DefaultHasher::new();
+                #(
+                    (<#type_args as ::unity2::ClassIdentity>::class().raw()
+                        as *const _ as usize).hash(&mut __h);
+                )*
+                let __key = __h.finish();
+                let __map = CACHE.get_or_init(|| {
+                    ::std::sync::Mutex::new(::std::collections::HashMap::new())
+                });
+                let mut __guard = __map.lock().unwrap();
+                *__guard.entry(__key).or_insert_with(|| {
+                    ::unity2::Class::lookup(
+                        <Self as ::unity2::ClassIdentity>::NAMESPACE,
+                        <Self as ::unity2::ClassIdentity>::NAME,
+                    )
+                    .make_generic(&[
+                        #(<#type_args as ::unity2::ClassIdentity>::class()),*
+                    ])
+                    .unwrap_or_else(|| panic!(
+                        "{}",
+                        ::unity2::Il2CppError::FailedGenericInstantiation {
+                            class: ::core::stringify!(#class_ident).to_string(),
+                        }
+                    ))
+                })
             },
         )
     };
@@ -211,10 +233,16 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
             let base_macro = format_ident!("__{}_ancestor_impls", p.base);
             let inner = strip_angles(&p.generics);
             let rewritten = rewrite_tpidents(inner, &type_param_idents, &gen_meta_idents);
-            if rewritten.is_empty() {
-                quote! { $crate::#base_macro!($child); }
+            let prefix = if p.path_prefix.is_empty() {
+                quote! { $crate:: }
             } else {
-                quote! { $crate::#base_macro!($child, #rewritten); }
+                let pp = &p.path_prefix;
+                quote! { #pp }
+            };
+            if rewritten.is_empty() {
+                quote! { #prefix #base_macro!($child); }
+            } else {
+                quote! { #prefix #base_macro!($child, #rewritten); }
             }
         })
         .collect();
@@ -271,10 +299,23 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         .map(|p| {
             let base_macro = format_ident!("__{}_ancestor_impls", p.base);
             let inner = strip_angles(&p.generics);
-            if inner.is_empty() {
-                quote! { crate::#base_macro!(#class_ident); }
+            let use_path = if p.path_prefix.is_empty() {
+                quote! { crate:: }
             } else {
-                quote! { crate::#base_macro!(#class_ident, #inner); }
+                let pp = &p.path_prefix;
+                quote! { #pp }
+            };
+            let alias = format_ident!("__unity2_anchor_{}_for_{}", p.base, class_ident);
+            if inner.is_empty() {
+                quote! {
+                    use #use_path #base_macro as #alias;
+                    #alias!(#class_ident);
+                }
+            } else {
+                quote! {
+                    use #use_path #base_macro as #alias;
+                    #alias!(#class_ident, #inner);
+                }
             }
         })
         .collect();
@@ -285,6 +326,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         let direct = &class_attrs.parents[0];
         let direct_base = &direct.base;
         let direct_generics = &direct.generics;
+        let direct_prefix = &direct.path_prefix;
         let direct_trait_ident = format_ident!("I{}", direct_base);
 
         let impls = if type_param_idents.is_empty() {
@@ -293,11 +335,12 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
             let generic_ancestor_impls = class_attrs.parents.iter().map(|p| {
                 let base = &p.base;
                 let generics = &p.generics;
+                let prefix = &p.path_prefix;
                 let trait_ident = format_ident!("I{}", base);
                 quote! {
-                    impl #impl_generics #trait_ident #generics for #class_ident #type_generics {}
+                    impl #impl_generics #prefix #trait_ident #generics for #class_ident #type_generics {}
                     impl #impl_generics ::core::convert::From<#class_ident #type_generics>
-                        for #base #generics
+                        for #prefix #base #generics
                     {
                         fn from(value: #class_ident #type_generics) -> Self {
                             <Self as ::unity2::FromIlInstance>::from_il_instance(
@@ -310,7 +353,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
             quote! { #(#generic_ancestor_impls)* }
         };
 
-        (quote! { #direct_trait_ident #direct_generics }, impls)
+        (quote! { #direct_prefix #direct_trait_ident #direct_generics }, impls)
     };
 
     let instance_accessors = fields.iter().filter(|f| !f.is_static).map(|f| {
@@ -475,10 +518,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
             const NAME: &'static str = #class_name_lit;
 
             fn class() -> ::unity2::Class {
-                // Monomorphized per generic instantiation, each List<T> gets its own CACHE
-                static CACHE: ::std::sync::OnceLock<::unity2::Class> =
-                    ::std::sync::OnceLock::new();
-                *CACHE.get_or_init(|| { #class_lookup_body })
+                #class_resolver
             }
         }
 
@@ -1430,17 +1470,28 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
 
     quote! {
         #unsafe_kw fn #name(#receiver #(#typed_params),*) #ret_clause #sized_bound {
-            static CACHE: ::std::sync::OnceLock<(
-                usize,
-                &'static ::unity2::MethodInfo,
-            )> = ::std::sync::OnceLock::new();
-            let (__ptr, __info) = *CACHE.get_or_init(|| {
-                let __class = <Self as ::unity2::ClassIdentity>::class();
-                let __mi = __class.raw()
-                    .get_method_from_name(#il2cpp_name_lit, #il2cpp_arg_count)
-                    .expect(#missing_msg);
-                (__mi.method_ptr as usize, &*__mi)
+            static CACHE: ::std::sync::OnceLock<
+                ::std::sync::Mutex<
+                    ::std::collections::HashMap<
+                        usize,
+                        (usize, &'static ::unity2::MethodInfo),
+                    >,
+                >,
+            > = ::std::sync::OnceLock::new();
+            let __class = <Self as ::unity2::ClassIdentity>::class();
+            let __key = __class.raw() as *const _ as usize;
+            let __map = CACHE.get_or_init(|| {
+                ::std::sync::Mutex::new(::std::collections::HashMap::new())
             });
+            let (__ptr, __info) = {
+                let mut __guard = __map.lock().unwrap();
+                *__guard.entry(__key).or_insert_with(|| {
+                    let __mi = __class.raw()
+                        .get_method_from_name(#il2cpp_name_lit, #il2cpp_arg_count)
+                        .expect(#missing_msg);
+                    (__mi.method_ptr as usize, &*__mi)
+                })
+            };
             let __f: #extern_fn_ty = unsafe { ::std::mem::transmute(__ptr) };
             __f(#call_args)
         }
