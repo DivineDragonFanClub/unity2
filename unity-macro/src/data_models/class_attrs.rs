@@ -44,17 +44,12 @@ impl ParentType {
     }
 }
 
-// Walks the struct attributes for a single #[parent(...)] chain
 pub fn parse_parent_attr(attributes: &[venial::Attribute]) -> ParseResult<Vec<ParentType>> {
-    let mut found: Option<Vec<ParentType>> = None;
+    let mut found: Vec<ParentType> = Vec::new();
 
     for attr in attributes {
         if !path_is_single(&attr.path, "parent") {
             continue;
-        }
-
-        if found.is_some() {
-            return bail!(attr, "only a single #[parent] attribute is allowed");
         }
 
         let tokens = attr.value.get_value_tokens();
@@ -154,10 +149,10 @@ pub fn parse_parent_attr(attributes: &[venial::Attribute]) -> ParseResult<Vec<Pa
             return bail!(attr, "#[parent(...)] expects at least one type");
         }
 
-        found = Some(entries);
+        found.extend(entries);
     }
 
-    Ok(found.unwrap_or_default())
+    Ok(found)
 }
 
 impl ClassAttrs {
