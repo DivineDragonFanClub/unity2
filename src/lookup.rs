@@ -1,4 +1,4 @@
-use crate::il2cpp::MethodInfo;
+use crate::il2cpp::{Il2CppType, MethodInfo};
 use crate::{Class, Il2CppError, Il2CppResult};
 
 pub fn method_offset_by_name(
@@ -17,25 +17,6 @@ pub fn method_offset_on_class(
     param_count: usize,
 ) -> Il2CppResult<usize> {
     let raw = class.raw();
-
-    let matches = raw
-        .get_methods()
-        .iter()
-        .filter(|m| {
-            m.parameters_count as usize == param_count
-                && m.get_name().as_deref() == Some(method_name)
-        })
-        .count();
-
-    if matches > 1 {
-        return Err(Il2CppError::AmbiguousMethod {
-            class: format!("{}.{}", raw.get_namespace(), raw.get_name()),
-            method: method_name.to_string(),
-            param_count,
-            overload_count: matches,
-        });
-    }
-
     let method = raw.get_method_from_name(method_name, param_count).ok_or_else(|| {
         Il2CppError::MissingMethod {
             class: format!("{}.{}", raw.get_namespace(), raw.get_name()),
@@ -76,31 +57,14 @@ fn method_ptr_to_offset(method_ptr: *mut u8) -> usize {
     unsafe { (method_ptr as *const u8).offset_from(text.as_ptr()) as usize }
 }
 
+const METHOD_ATTRIBUTE_STATIC: u16 = 0x0010;
+
 pub fn method_info_on_class(
     class: Class,
     method_name: &str,
     param_count: usize,
 ) -> Il2CppResult<&'static MethodInfo> {
     let raw = class.raw();
-
-    let matches = raw
-        .get_methods()
-        .iter()
-        .filter(|m| {
-            m.parameters_count as usize == param_count
-                && m.get_name().as_deref() == Some(method_name)
-        })
-        .count();
-
-    if matches > 1 {
-        return Err(Il2CppError::AmbiguousMethod {
-            class: format!("{}.{}", raw.get_namespace(), raw.get_name()),
-            method: method_name.to_string(),
-            param_count,
-            overload_count: matches,
-        });
-    }
-
     raw.get_method_from_name(method_name, param_count)
         .map(|mi| &*mi)
         .ok_or_else(|| Il2CppError::MissingMethod {
@@ -108,6 +72,197 @@ pub fn method_info_on_class(
             method: method_name.to_string(),
             param_count,
         })
+}
+
+fn for_each_in_parent_chain<F: FnMut(&'static crate::il2cpp::Il2CppClass) -> bool>(
+    class: Class,
+    mut visit: F,
+) {
+    const MAX_DEPTH: usize = 16;
+    const PARENT_OFFSET: usize = 0x58;
+    let mut cur: *const crate::il2cpp::Il2CppClass = class.raw() as *const _;
+    let mut steps = 0usize;
+    while !cur.is_null() && steps < MAX_DEPTH {
+        let c: &'static crate::il2cpp::Il2CppClass = unsafe { &*cur };
+        if !visit(c) {
+            return;
+        }
+        let parent_ptr_loc = (cur as *const u8).wrapping_add(PARENT_OFFSET)
+            as *const *const crate::il2cpp::Il2CppClass;
+        let parent_ptr = unsafe { *parent_ptr_loc };
+        if parent_ptr.is_null() || std::ptr::eq(parent_ptr, cur) {
+            return;
+        }
+        cur = parent_ptr;
+        steps += 1;
+    }
+}
+
+pub fn method_info_on_class_with_signature(
+    class: Class,
+    method_name: &str,
+    param_count: usize,
+    param_types: &[&'static Il2CppType],
+    is_static: bool,
+) -> Il2CppResult<&'static MethodInfo> {
+    debug_assert_eq!(param_count, param_types.len(), "param_count must match param_types.len()");
+    let raw = class.raw();
+    let mut strict_hits: Vec<&'static MethodInfo> = Vec::new();
+    let mut loose_hits: Vec<&'static MethodInfo> = Vec::new();
+    for_each_in_parent_chain(class, |c| {
+        let before_strict = strict_hits.len();
+        let before_loose = loose_hits.len();
+        for m in c.get_methods() {
+            if m.parameters_count as usize != param_count {
+                continue;
+            }
+            if m.get_name().as_deref() != Some(method_name) {
+                continue;
+            }
+            let mi_static = (m.flags & METHOD_ATTRIBUTE_STATIC) != 0;
+            if mi_static != is_static {
+                continue;
+            }
+            let actual = m.get_parameters();
+            let mut strict = true;
+            let mut loose = true;
+            for (i, want) in param_types.iter().enumerate() {
+                let got = actual[i].parameter_type;
+                if !il2cpp_type_eq_strict(got, *want) {
+                    strict = false;
+                }
+                if !il2cpp_type_eq(got, *want) {
+                    loose = false;
+                    break;
+                }
+            }
+            if !loose {
+                continue;
+            }
+            if strict {
+                strict_hits.push(*m);
+            } else {
+                loose_hits.push(*m);
+            }
+        }
+        strict_hits.len() == before_strict && loose_hits.len() == before_loose
+    });
+    let hits = if !strict_hits.is_empty() {
+        strict_hits
+    } else {
+        loose_hits
+    };
+
+    match hits.len() {
+        0 => Err(Il2CppError::MissingMethod {
+            class: format!("{}.{}", raw.get_namespace(), raw.get_name()),
+            method: method_name.to_string(),
+            param_count,
+        }),
+        1 => Ok(hits[0]),
+        n => Err(Il2CppError::AmbiguousMethod {
+            class: format!("{}.{}", raw.get_namespace(), raw.get_name()),
+            method: method_name.to_string(),
+            param_count,
+            overload_count: n,
+        }),
+    }
+}
+
+fn il2cpp_type_eq(a: &Il2CppType, b: &Il2CppType) -> bool {
+    if std::ptr::eq(a as *const _, b as *const _) {
+        return true;
+    }
+    if a.byref() != b.byref() {
+        return false;
+    }
+    if (a.type_enum() == crate::il2cpp::TYPE_OBJECT && is_reference_type_enum(b.type_enum()))
+        || (b.type_enum() == crate::il2cpp::TYPE_OBJECT && is_reference_type_enum(a.type_enum()))
+    {
+        return true;
+    }
+    if a.type_enum() != b.type_enum() {
+        return false;
+    }
+    match a.type_enum() {
+        crate::il2cpp::TYPE_VOID
+        | crate::il2cpp::TYPE_BOOLEAN
+        | crate::il2cpp::TYPE_CHAR
+        | crate::il2cpp::TYPE_I1
+        | crate::il2cpp::TYPE_U1
+        | crate::il2cpp::TYPE_I2
+        | crate::il2cpp::TYPE_U2
+        | crate::il2cpp::TYPE_I4
+        | crate::il2cpp::TYPE_U4
+        | crate::il2cpp::TYPE_I8
+        | crate::il2cpp::TYPE_U8
+        | crate::il2cpp::TYPE_R4
+        | crate::il2cpp::TYPE_R8
+        | crate::il2cpp::TYPE_STRING
+        | crate::il2cpp::TYPE_OBJECT
+        | crate::il2cpp::TYPE_I
+        | crate::il2cpp::TYPE_U => true,
+        crate::il2cpp::TYPE_CLASS | crate::il2cpp::TYPE_VALUETYPE => {
+            a.data_as_usize() == b.data_as_usize()
+        }
+        crate::il2cpp::TYPE_SZARRAY => {
+            let ae = unsafe { &*(a.data_as_usize() as *const Il2CppType) };
+            let be = unsafe { &*(b.data_as_usize() as *const Il2CppType) };
+            il2cpp_type_eq(ae, be)
+        }
+        _ => a.data_as_usize() == b.data_as_usize(),
+    }
+}
+
+fn il2cpp_type_eq_strict(a: &Il2CppType, b: &Il2CppType) -> bool {
+    if std::ptr::eq(a as *const _, b as *const _) {
+        return true;
+    }
+    if a.byref() != b.byref() {
+        return false;
+    }
+    if a.type_enum() != b.type_enum() {
+        return false;
+    }
+    match a.type_enum() {
+        crate::il2cpp::TYPE_VOID
+        | crate::il2cpp::TYPE_BOOLEAN
+        | crate::il2cpp::TYPE_CHAR
+        | crate::il2cpp::TYPE_I1
+        | crate::il2cpp::TYPE_U1
+        | crate::il2cpp::TYPE_I2
+        | crate::il2cpp::TYPE_U2
+        | crate::il2cpp::TYPE_I4
+        | crate::il2cpp::TYPE_U4
+        | crate::il2cpp::TYPE_I8
+        | crate::il2cpp::TYPE_U8
+        | crate::il2cpp::TYPE_R4
+        | crate::il2cpp::TYPE_R8
+        | crate::il2cpp::TYPE_STRING
+        | crate::il2cpp::TYPE_OBJECT
+        | crate::il2cpp::TYPE_I
+        | crate::il2cpp::TYPE_U => true,
+        crate::il2cpp::TYPE_CLASS | crate::il2cpp::TYPE_VALUETYPE => {
+            a.data_as_usize() == b.data_as_usize()
+        }
+        crate::il2cpp::TYPE_SZARRAY => {
+            let ae = unsafe { &*(a.data_as_usize() as *const Il2CppType) };
+            let be = unsafe { &*(b.data_as_usize() as *const Il2CppType) };
+            il2cpp_type_eq_strict(ae, be)
+        }
+        _ => a.data_as_usize() == b.data_as_usize(),
+    }
+}
+
+fn is_reference_type_enum(t: u8) -> bool {
+    matches!(
+        t,
+        crate::il2cpp::TYPE_STRING
+            | crate::il2cpp::TYPE_CLASS
+            | crate::il2cpp::TYPE_OBJECT
+            | crate::il2cpp::TYPE_SZARRAY
+            | crate::il2cpp::TYPE_ARRAY
+    )
 }
 
 pub fn method_info_by_vtable_index_on_class(

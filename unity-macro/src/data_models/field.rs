@@ -8,7 +8,6 @@ pub struct Field {
     pub ty: venial::TypeExpr,
     // IL2CPP-side field name passed to class_get_field_from_name, defaults to the Rust ident
     pub il2cpp_name: String,
-    pub readonly: bool,
     // `static` is a Rust keyword so the marker is #[static_field] instead
     pub is_static: bool,
 }
@@ -49,10 +48,6 @@ impl Field {
             (None, None) => field.name.to_string(),
         };
 
-        let readonly = field
-            .attributes
-            .iter()
-            .any(|attr| crate::util::path_is_single(&attr.path, "readonly"));
         let is_static = field
             .attributes
             .iter()
@@ -62,7 +57,6 @@ impl Field {
             name: field.name.clone(),
             ty: field.ty.clone(),
             il2cpp_name,
-            readonly,
             is_static,
         })
     }

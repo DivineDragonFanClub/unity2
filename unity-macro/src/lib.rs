@@ -217,6 +217,22 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         out
     }
 
+    fn starts_with_crate(stream: &TokenStream2) -> bool {
+        let mut iter = stream.clone().into_iter();
+        let first = iter.next();
+        let second = iter.next();
+        match (first, second) {
+            (
+                Some(proc_macro2::TokenTree::Punct(p1)),
+                Some(proc_macro2::TokenTree::Punct(p2)),
+            ) if p1.as_char() == ':' && p2.as_char() == ':' => {
+                matches!(iter.next(), Some(proc_macro2::TokenTree::Ident(id)) if id == "crate")
+            }
+            (Some(proc_macro2::TokenTree::Ident(id)), _) => id == "crate",
+            _ => false,
+        }
+    }
+
     fn strip_angles(ts: &TokenStream2) -> TokenStream2 {
         let toks: Vec<_> = ts.clone().into_iter().collect();
         if toks.len() < 2 {
@@ -233,7 +249,9 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
             let base_macro = format_ident!("__{}_ancestor_impls", p.base);
             let inner = strip_angles(&p.generics);
             let rewritten = rewrite_tpidents(inner, &type_param_idents, &gen_meta_idents);
-            let prefix = if p.path_prefix.is_empty() {
+            let is_in_crate =
+                p.path_prefix.is_empty() || starts_with_crate(&p.path_prefix);
+            let prefix = if is_in_crate {
                 quote! { $crate:: }
             } else {
                 p.macro_path_prefix()
@@ -292,27 +310,99 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         }
     };
 
+    let inherit_cascade: Vec<TokenStream2> = class_attrs
+        .parents
+        .iter()
+        .take(1)
+        .map(|p| {
+            let inner = strip_angles(&p.generics);
+            let rewritten = rewrite_tpidents(inner, &type_param_idents, &gen_meta_idents);
+            let is_explicit_in_crate =
+                !p.path_prefix.is_empty() && starts_with_crate(&p.path_prefix);
+            let is_cross_crate =
+                !p.path_prefix.is_empty() && !is_explicit_in_crate;
+            if is_explicit_in_crate {
+                let parent_inherit = format_ident!("__{}_inherit", p.base);
+                let prefix = &p.path_prefix;
+                if rewritten.is_empty() {
+                    quote! { #prefix #parent_inherit!($child); }
+                } else {
+                    quote! { #prefix #parent_inherit!($child, #rewritten); }
+                }
+            } else if is_cross_crate {
+                let crate_prefix = p.macro_path_prefix();
+                let parent_export = format_ident!("__{}_ancestor_impls", p.base);
+                if rewritten.is_empty() {
+                    quote! { #crate_prefix #parent_export!($child); }
+                } else {
+                    quote! { #crate_prefix #parent_export!($child, #rewritten); }
+                }
+            } else {
+                let parent_export = format_ident!("__{}_ancestor_impls", p.base);
+                if rewritten.is_empty() {
+                    quote! { $crate::#parent_export!($child); }
+                } else {
+                    quote! { $crate::#parent_export!($child, #rewritten); }
+                }
+            }
+        })
+        .collect();
+
+    let inherit_macro_ident = format_ident!("__{}_inherit", class_ident);
+    let inherit_wrapper_def = quote! {
+        #[doc(hidden)]
+        macro_rules! #inherit_macro_ident {
+            ($child:ty #(#macro_param_slots)*) => {
+                #(#inherit_cascade)*
+                #own_trait_impl
+                #own_from_impl
+            };
+        }
+        #[doc(hidden)]
+        #[allow(unused_imports)]
+        pub(crate) use #inherit_macro_ident;
+    };
+
     let parent_invocations_for_self: Vec<TokenStream2> = class_attrs
         .parents
         .iter()
         .map(|p| {
-            let base_macro = format_ident!("__{}_ancestor_impls", p.base);
             let inner = strip_angles(&p.generics);
-            let use_path = if p.path_prefix.is_empty() {
-                quote! { crate:: }
-            } else {
-                p.macro_path_prefix()
-            };
-            let alias = format_ident!("__unity2_anchor_{}_for_{}", p.base, class_ident);
-            if inner.is_empty() {
-                quote! {
-                    use #use_path #base_macro as #alias;
-                    #alias!(#class_ident);
+            let is_explicit_in_crate =
+                !p.path_prefix.is_empty() && starts_with_crate(&p.path_prefix);
+            let is_cross_crate =
+                !p.path_prefix.is_empty() && !is_explicit_in_crate;
+            if is_explicit_in_crate {
+                let inherit_macro = format_ident!("__{}_inherit", p.base);
+                let prefix = &p.path_prefix;
+                if inner.is_empty() {
+                    quote! { #prefix #inherit_macro!(#class_ident); }
+                } else {
+                    quote! { #prefix #inherit_macro!(#class_ident, #inner); }
+                }
+            } else if is_cross_crate {
+                let crate_prefix = p.macro_path_prefix();
+                let base_macro = format_ident!("__{}_ancestor_impls", p.base);
+                if inner.is_empty() {
+                    quote! { #crate_prefix #base_macro!(#class_ident); }
+                } else {
+                    quote! { #crate_prefix #base_macro!(#class_ident, #inner); }
                 }
             } else {
-                quote! {
-                    use #use_path #base_macro as #alias;
-                    #alias!(#class_ident, #inner);
+                let base_macro = format_ident!("__{}_ancestor_impls", p.base);
+                let alias = format_ident!(
+                    "__unity2_anchor_{}_for_{}", p.base, class_ident
+                );
+                if inner.is_empty() {
+                    quote! {
+                        use crate::#base_macro as #alias;
+                        #alias!(#class_ident);
+                    }
+                } else {
+                    quote! {
+                        use crate::#base_macro as #alias;
+                        #alias!(#class_ident, #inner);
+                    }
                 }
             }
         })
@@ -359,35 +449,19 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         let ty = &f.ty;
         let il2cpp_name = &f.il2cpp_name;
 
-        // Inherited fields keep their byte offset across the hierarchy, so one cached offset is correct for every Self
-        let resolve_offset = quote! {
-            static OFFSET: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
-            let __offset = *OFFSET.get_or_init(|| {
-                let class = ::unity2::object_get_class(self);
-                let field = ::unity2::class_get_field_from_name(class, #il2cpp_name);
-                field.offset as usize
-            });
-        };
-
-        let setter = if f.readonly {
-            quote! {}
-        } else {
-            let setter_name = format_ident!("set_{}", rust_name);
-            quote! {
-                fn #setter_name(self, value: #ty) {
-                    #resolve_offset
-                    ::unity2::field_set_value_at_offset(self, __offset, value);
-                }
-            }
-        };
-
+        let setter_name = format_ident!("set_{}", rust_name);
         quote! {
             fn #rust_name(self) -> #ty {
-                #resolve_offset
+                static OFFSET: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
+                let __offset = ::unity2::cached_field_offset_instance(&OFFSET, self, #il2cpp_name);
                 ::unity2::field_get_value_at_offset(self, __offset)
             }
 
-            #setter
+            fn #setter_name(self, value: #ty) {
+                static OFFSET: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
+                let __offset = ::unity2::cached_field_offset_instance(&OFFSET, self, #il2cpp_name);
+                ::unity2::field_set_value_at_offset(self, __offset, value);
+            }
         }
     });
 
@@ -399,41 +473,26 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         let ty = &f.ty;
         let il2cpp_name = &f.il2cpp_name;
 
-        let resolve_offset = quote! {
-            static OFFSET: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
-            let __offset = *OFFSET.get_or_init(|| {
-                let __class = <Self as ::unity2::ClassIdentity>::class();
-                let field = ::unity2::class_get_field_from_name(__class.raw(), #il2cpp_name);
-                field.offset as usize
-            });
-        };
-
-        let setter = if f.readonly {
-            quote! {}
-        } else {
-            let setter_name = format_ident!("set_{}", rust_name);
-            quote! {
-                #vis fn #setter_name(value: #ty) {
-                    #resolve_offset
-                    ::unity2::static_field_set_value_at_offset(
-                        <Self as ::unity2::ClassIdentity>::class(),
-                        __offset,
-                        value,
-                    );
-                }
-            }
-        };
-
+        let setter_name = format_ident!("set_{}", rust_name);
         quote! {
             #vis fn #rust_name() -> #ty {
-                #resolve_offset
+                static OFFSET: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
+                let __offset = ::unity2::cached_field_offset_static::<Self>(&OFFSET, #il2cpp_name);
                 ::unity2::static_field_get_value_at_offset(
                     <Self as ::unity2::ClassIdentity>::class(),
                     __offset,
                 )
             }
 
-            #setter
+            #vis fn #setter_name(value: #ty) {
+                static OFFSET: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
+                let __offset = ::unity2::cached_field_offset_static::<Self>(&OFFSET, #il2cpp_name);
+                ::unity2::static_field_set_value_at_offset(
+                    <Self as ::unity2::ClassIdentity>::class(),
+                    __offset,
+                    value,
+                );
+            }
         }
     });
 
@@ -491,14 +550,6 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         #[derive(::core::clone::Clone, ::core::marker::Copy)]
         #vis struct #class_ident #impl_generics(::unity2::IlInstance #phantom_field_decl);
 
-        impl #impl_generics #class_ident #type_generics {
-            #[doc(hidden)]
-            #[inline]
-            pub fn __unity2_from_il_instance(instance: ::unity2::IlInstance) -> Self {
-                Self(instance #phantom_init)
-            }
-        }
-
         impl #impl_generics ::core::convert::From<#class_ident #type_generics> for ::unity2::IlInstance {
             fn from(value: #class_ident #type_generics) -> Self {
                 value.0
@@ -523,7 +574,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         impl #impl_generics ::unity2::FromIlInstance for #class_ident #type_generics {
             #[inline]
             fn from_il_instance(instance: ::unity2::IlInstance) -> Self {
-                Self::__unity2_from_il_instance(instance)
+                Self(instance #phantom_init)
             }
         }
 
@@ -543,6 +594,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         #statics_block
 
         #ancestor_macro_def
+        #inherit_wrapper_def
     })
 }
 
@@ -647,22 +699,49 @@ fn enum_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream
         .zip(variant_names_str.iter())
         .map(|(name, name_str)| quote! { Self::#name => #name_str, });
 
-    let identity_methods = match (&il2cpp_namespace, &il2cpp_name) {
+    let (identity_methods, identity_impls) = match (&il2cpp_namespace, &il2cpp_name) {
         (Some(ns), Some(name)) => {
             let ns_lit = ns.as_str();
             let name_lit = name.as_str();
-            quote! {
-                pub const IL2CPP_NAMESPACE: &'static str = #ns_lit;
-                pub const IL2CPP_NAME: &'static str = #name_lit;
+            (
+                quote! {
+                    pub const IL2CPP_NAMESPACE: &'static str = #ns_lit;
+                    pub const IL2CPP_NAME: &'static str = #name_lit;
 
-                pub fn class() -> ::unity2::Class {
-                    static CACHE: ::std::sync::OnceLock<::unity2::Class> =
-                        ::std::sync::OnceLock::new();
-                    *CACHE.get_or_init(|| ::unity2::Class::lookup(#ns_lit, #name_lit))
-                }
-            }
+                    pub fn class() -> ::unity2::Class {
+                        static CACHE: ::std::sync::OnceLock<::unity2::Class> =
+                            ::std::sync::OnceLock::new();
+                        *CACHE.get_or_init(|| ::unity2::Class::lookup(#ns_lit, #name_lit))
+                    }
+                },
+                quote! {
+                    impl ::unity2::ClassIdentity for #enum_name {
+                        const NAMESPACE: &'static str = #ns_lit;
+                        const NAME: &'static str = #name_lit;
+                        fn class() -> ::unity2::Class {
+                            #enum_name::class()
+                        }
+                    }
+                    impl ::unity2::IlType for #enum_name {
+                        fn il_type() -> &'static ::unity2::il2cpp::Il2CppType {
+                            &<Self as ::unity2::ClassIdentity>::class().raw()._1.byval_arg
+                        }
+                    }
+                },
+            )
         }
-        _ => quote! {},
+        _ => {
+            (
+                quote! {},
+                quote! {
+                    impl ::unity2::IlType for #enum_name {
+                        fn il_type() -> &'static ::unity2::il2cpp::Il2CppType {
+                            <#repr_ident as ::unity2::IlType>::il_type()
+                        }
+                    }
+                },
+            )
+        }
     };
 
     Ok(quote! {
@@ -700,6 +779,8 @@ fn enum_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream
                 })
             }
         }
+
+        #identity_impls
     })
 }
 
@@ -1021,7 +1102,16 @@ fn from_offset_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<Toke
     })
 }
 
-fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream2> {
+fn methods_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream2> {
+    let mut is_value_type = false;
+    for tt in attr.into_iter() {
+        if let proc_macro2::TokenTree::Ident(id) = tt {
+            if id == "value" {
+                is_value_type = true;
+            }
+        }
+    }
+
     let impl_block = match item {
         venial::Item::Impl(i) => i,
         _ => {
@@ -1093,6 +1183,24 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
 
         let method_defaults = methods.iter().map(|m| build_generic_trait_default(m));
 
+        let blanket_bounds = if is_value_type {
+            quote! {
+                impl<
+                    #(#type_param_idents: ::unity2::ClassIdentity,)*
+                    __U: ::unity2::ClassIdentity
+                > #methods_trait_ident<#(#type_param_idents),*> for __U
+                {}
+            }
+        } else {
+            quote! {
+                impl<
+                    #(#type_param_idents: ::unity2::ClassIdentity,)*
+                    __U: #field_trait_ident<#(#type_param_idents),*> + ::unity2::ClassIdentity
+                > #methods_trait_ident<#(#type_param_idents),*> for __U
+                {}
+            }
+        };
+
         return Ok(quote! {
             pub trait #methods_trait_ident<
                 #(#type_param_idents: ::unity2::ClassIdentity),*
@@ -1100,13 +1208,7 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
                 #(#method_defaults)*
             }
 
-            // Any type implementing the parent's field-accessor trait plus ClassIdentity
-            // inherits the methods trait
-            impl<
-                #(#type_param_idents: ::unity2::ClassIdentity,)*
-                __U: #field_trait_ident<#(#type_param_idents),*> + ::unity2::ClassIdentity
-            > #methods_trait_ident<#(#type_param_idents),*> for __U
-            {}
+            #blanket_bounds
         });
     }
 
@@ -1130,6 +1232,11 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
             Resolution::Name { name: il_name, args } => {
                 let args_count = args.unwrap_or(m.params.len());
                 let il_name_lit = il_name.as_str();
+                let is_static_lit = m.is_static;
+                let param_type_exprs = m.params.iter().map(|p| {
+                    let pty = &p.ty;
+                    quote! { <#pty as ::unity2::IlType>::il_type() }
+                });
                 (
                     quote! { #[::skyline::from_offset(#lookup_mod_ident::get_offset() as usize)] },
                     quote! {
@@ -1140,10 +1247,15 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
                             static METHOD: ::std::sync::LazyLock<
                                 ::unity2::Il2CppResult<&'static ::unity2::il2cpp::MethodInfo>,
                             > = ::std::sync::LazyLock::new(|| {
-                                ::unity2::lookup::method_info_on_class(
+                                let param_types: &[&'static ::unity2::il2cpp::Il2CppType] = &[
+                                    #(#param_type_exprs),*
+                                ];
+                                ::unity2::lookup::method_info_on_class_with_signature(
                                     <#self_ty as ::unity2::ClassIdentity>::class(),
                                     #il_name_lit,
                                     #args_count,
+                                    param_types,
+                                    #is_static_lit,
                                 )
                             });
                             pub fn get_method_info() -> &'static ::unity2::il2cpp::MethodInfo {
@@ -1248,13 +1360,21 @@ fn methods_inner(_attr: TokenStream2, item: venial::Item) -> ParseResult<TokenSt
         let instance_fns = methods
             .iter()
             .filter(|m| !m.is_static)
-            .map(|m| build_instance_wrapper(m, &self_ty, &raw_module_ident));
-        quote! {
-            pub trait #methods_trait_ident: #trait_ident {
-                #(#instance_fns)*
+            .map(|m| build_instance_wrapper(m, &self_ty, &raw_module_ident, is_value_type));
+        if is_value_type {
+            quote! {
+                impl #self_ty {
+                    #(#instance_fns)*
+                }
             }
+        } else {
+            quote! {
+                pub trait #methods_trait_ident: #trait_ident {
+                    #(#instance_fns)*
+                }
 
-            impl<__T: #trait_ident> #methods_trait_ident for __T {}
+                impl<__T: #trait_ident> #methods_trait_ident for __T {}
+            }
         }
     } else {
         quote! {}
@@ -1500,6 +1620,7 @@ fn build_instance_wrapper(
     m: &Method,
     self_ty: &venial::TypeExpr,
     raw_mod: &proc_macro2::Ident,
+    is_value_type: bool,
 ) -> TokenStream2 {
     let name = &m.name;
     let typed_params = m.params.iter().map(|p| {
@@ -1525,11 +1646,17 @@ fn build_instance_wrapper(
     };
 
     let mi_expr = method_info_expr(m, raw_mod);
-    let body = quote! {
-        let __receiver = #self_ty::__unity2_from_il_instance(
-            <Self as ::unity2::SystemObject>::as_instance(self),
-        );
-        #raw_mod::#name(__receiver, #(#arg_exprs,)* #mi_expr)
+    let body = if is_value_type {
+        quote! {
+            #raw_mod::#name(self, #(#arg_exprs,)* #mi_expr)
+        }
+    } else {
+        quote! {
+            let __receiver = <#self_ty as ::unity2::FromIlInstance>::from_il_instance(
+                <Self as ::unity2::SystemObject>::as_instance(self),
+            );
+            #raw_mod::#name(__receiver, #(#arg_exprs,)* #mi_expr)
+        }
     };
 
     if m.is_unsafe {

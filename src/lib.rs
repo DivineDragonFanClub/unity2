@@ -1,5 +1,3 @@
-#![allow(macro_expanded_macro_exports_accessed_by_absolute_paths)]
-
 extern crate self as unity2;
 
 use crate::il2cpp::Il2CppClass;
@@ -33,7 +31,6 @@ mod backend_assertion;
 
 pub mod class;
 pub mod diag;
-pub mod engine;
 pub mod error;
 pub mod il2cpp;
 pub mod lookup;
@@ -84,6 +81,8 @@ impl_primitive_class_identity! {
     f32  => "Single",
     f64  => "Double",
     char => "Char",
+    usize => "UIntPtr",
+    isize => "IntPtr",
 }
 
 #[repr(transparent)]
@@ -133,6 +132,15 @@ pub trait IlType {
 impl IlType for () {
     fn il_type() -> &'static il2cpp::Il2CppType {
         &Class::lookup("System", "Void").raw()._1.byval_arg
+    }
+}
+
+impl<T: Copy + ClassIdentity> ClassIdentity for Array<T> {
+    const NAMESPACE: &'static str = "System";
+    const NAME: &'static str = "Array";
+
+    fn class() -> Class {
+        T::class().array_class()
     }
 }
 
@@ -268,6 +276,34 @@ impl IlInstance {
     #[inline]
     pub(crate) fn field_ptr(self, offset: usize) -> *mut u8 {
         unsafe { (self.0 as *mut u8).add(offset) }
+    }
+}
+
+impl IlType for IlInstance {
+    fn il_type() -> &'static il2cpp::Il2CppType {
+        &Class::lookup("System", "Object").raw()._1.byval_arg
+    }
+}
+
+impl<T> IlType for *const T {
+    fn il_type() -> &'static il2cpp::Il2CppType {
+        <IntPtr as IlType>::il_type()
+    }
+}
+impl<T> IlType for *mut T {
+    fn il_type() -> &'static il2cpp::Il2CppType {
+        <IntPtr as IlType>::il_type()
+    }
+}
+
+impl<T: IlType + 'static> IlType for Option<&T> {
+    fn il_type() -> &'static il2cpp::Il2CppType {
+        T::il_type()
+    }
+}
+impl<T: IlType + 'static> IlType for Option<&mut T> {
+    fn il_type() -> &'static il2cpp::Il2CppType {
+        T::il_type()
     }
 }
 
@@ -514,6 +550,31 @@ pub fn object_get_class<'a>(obj: impl SystemObject) -> &'a Il2CppClass {
     let instance = obj.as_instance();
     assert!(!instance.is_null(), "object_get_class on null reference");
     unsafe { &*(*instance.as_object_ptr()).class }
+}
+
+#[inline]
+pub fn cached_field_offset_instance<T: SystemObject>(
+    cache: &::std::sync::OnceLock<usize>,
+    instance: T,
+    name: &'static str,
+) -> usize {
+    *cache.get_or_init(|| {
+        let class = object_get_class(instance);
+        let field = class_get_field_from_name(class, name);
+        field.offset as usize
+    })
+}
+
+#[inline]
+pub fn cached_field_offset_static<T: ClassIdentity>(
+    cache: &::std::sync::OnceLock<usize>,
+    name: &'static str,
+) -> usize {
+    *cache.get_or_init(|| {
+        let class = <T as ClassIdentity>::class();
+        let field = class_get_field_from_name(class.raw(), name);
+        field.offset as usize
+    })
 }
 
 pub fn il2cpp_enum_names(enum_class: Class) -> Option<Vec<String>> {

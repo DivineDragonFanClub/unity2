@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use crate::class::Class;
 use crate::il2cpp::{api, Il2CppReflectionType, Il2CppType};
-use crate::{ClassIdentity, FromIlInstance, IlInstance};
+use crate::{ClassIdentity, FromIlInstance, IlInstance, IlType};
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
@@ -21,6 +21,12 @@ impl ClassIdentity for SystemType {
 impl FromIlInstance for SystemType {
     fn from_il_instance(instance: IlInstance) -> Self {
         Self(instance)
+    }
+}
+
+impl IlType for SystemType {
+    fn il_type() -> &'static Il2CppType {
+        &<Self as ClassIdentity>::class().raw()._1.byval_arg
     }
 }
 

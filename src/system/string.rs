@@ -2,7 +2,7 @@ use std::fmt::{self, Display, Formatter, Write};
 use std::sync::OnceLock;
 
 use crate::class::Class;
-use crate::{ClassIdentity, FromIlInstance, IlInstance};
+use crate::{ClassIdentity, FromIlInstance, IlInstance, IlType};
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
@@ -21,6 +21,12 @@ impl ClassIdentity for Il2CppString {
 impl FromIlInstance for Il2CppString {
     fn from_il_instance(instance: IlInstance) -> Self {
         Self(instance)
+    }
+}
+
+impl IlType for Il2CppString {
+    fn il_type() -> &'static crate::il2cpp::Il2CppType {
+        &<Self as ClassIdentity>::class().raw()._1.byval_arg
     }
 }
 
