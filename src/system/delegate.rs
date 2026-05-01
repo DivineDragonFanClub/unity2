@@ -1,5 +1,5 @@
 use crate::il2cpp::MethodInfo;
-use crate::{ClassIdentity, FromIlInstance, IlInstance};
+use crate::{Array, ClassIdentity, FromIlInstance, Il2CppString, IlInstance, IntPtr, SystemType};
 
 #[unity2::class(namespace = "System")]
 pub struct Action {}
@@ -91,4 +91,43 @@ impl<A: ClassIdentity, R: ClassIdentity> Func2<A, R> {
         instance.ctor(target, method_info as *const _);
         Some(instance)
     }
+}
+
+#[unity2::class(namespace = "System", name = "Delegate")]
+pub struct Delegate {
+    method_ptr: IntPtr,
+    invoke_impl: IntPtr,
+    method: IntPtr,
+    delegate_trampoline: IntPtr,
+    extra_arg: IntPtr,
+    method_code: IntPtr,
+    method_info: MethodInfo,
+    original_method_info: MethodInfo,
+    data: DelegateData,
+    method_is_virtual: bool,
+}
+
+#[unity2::methods]
+impl Delegate {
+    #[method(name = "get_Method")]
+    fn get_method(self) -> MethodInfo;
+}
+
+#[unity2::class(namespace = "System", name = "DelegateData")]
+pub struct DelegateData {
+    pub target_type: SystemType,
+    pub method_name: Il2CppString,
+    pub curried_first_arg: bool,
+}
+
+#[unity2::methods]
+impl DelegateData {
+    #[method(name = ".ctor")]
+    fn ctor(self);
+}
+
+#[unity2::class(namespace = "System", name = "MulticastDelegate")]
+#[parent(Delegate)]
+pub struct MulticastDelegate {
+    pub delegates: Array<Delegate>,
 }

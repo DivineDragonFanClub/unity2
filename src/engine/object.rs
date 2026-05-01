@@ -141,6 +141,19 @@ impl Transform {
 }
 
 #[unity2::class(namespace = "UnityEngine")]
+#[parent(Transform)]
+pub struct RectTransform {}
+
+#[unity2::methods]
+impl RectTransform {
+    // RectTransform's width (x) and height (y) in pixels: Vector2 {x,y}
+    #[method(name = "get_SizeDelta")]
+    pub fn get_size_delta(self) -> Vector2;
+    #[method(name = "set_SizeDelta")]
+    pub fn set_size_delta(self, value: Vector2);
+}
+
+#[unity2::class(namespace = "UnityEngine")]
 #[parent(Component)]
 pub struct Behaviour {}
 
@@ -302,3 +315,7 @@ impl ImageConversion {
     #[method(name = "EncodeToPNG", args = 1)]
     pub fn encode_to_png(texture: Texture2D) -> crate::Array<u8>;
 }
+
+#[unity2::class(namespace = "UnityEngine")]
+#[parent(Behaviour)]
+pub struct Camera {}
