@@ -49,13 +49,13 @@ pub struct Il2CppClass2 {
     pub token: u32,
     pub method_count: u16,
     property_count: u16,
-    field_count: u16,
+    pub field_count: u16,
     event_count: u16,
     pub nested_type_count: u16,
     pub vtable_count: u16,
     interfaces_count: u16,
     interface_offsets_count: u16,
-    type_hierarchy_depth: u8,
+    pub type_hierarchy_depth: u8,
     generic_recursion_depth: u8,
     pub rank: u8,
     _2_end: [u8; 0x9],
@@ -73,7 +73,19 @@ pub struct Il2CppClass {
 unsafe impl Send for Il2CppClass {}
 unsafe impl Sync for Il2CppClass {}
 
+impl Il2CppClass1 {
+    pub unsafe fn set_name_ptrs_via_ptr(
+        class1: *mut Il2CppClass1,
+        name: *const u8,
+        namespace: *const u8,
+    ) {
+        ::core::ptr::write_volatile(::core::ptr::addr_of_mut!((*class1).name), name);
+        ::core::ptr::write_volatile(::core::ptr::addr_of_mut!((*class1).namespace), namespace);
+    }
+}
+
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct FieldInfo {
     name: *const u8,
     ty: &'static Il2CppType,
@@ -82,7 +94,26 @@ pub struct FieldInfo {
     token: u32,
 }
 
+unsafe impl Send for FieldInfo {}
+unsafe impl Sync for FieldInfo {}
+
 impl FieldInfo {
+    pub fn new_synthetic(
+        name: *const u8,
+        ty: &'static Il2CppType,
+        parent: &'static Il2CppClass,
+        offset: i32,
+        token: u32,
+    ) -> Self {
+        Self {
+            name,
+            ty,
+            parent,
+            offset,
+            token,
+        }
+    }
+
     pub fn is_instance(&self) -> bool {
         (self.ty.bits >> 16) & 0x0010 == 0
     }

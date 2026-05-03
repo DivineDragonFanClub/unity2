@@ -59,6 +59,16 @@ pub fn from_offset(attr: TokenStream, item: TokenStream) -> TokenStream {
     translate(item, |body| from_offset_inner(TokenStream2::from(attr), body))
 }
 
+#[proc_macro_attribute]
+pub fn inject(attr: TokenStream, item: TokenStream) -> TokenStream {
+    translate(item, |body| inject_inner(TokenStream2::from(attr), body))
+}
+
+#[proc_macro_attribute]
+pub fn injected_methods(attr: TokenStream, item: TokenStream) -> TokenStream {
+    translate(item, |body| injected_methods_inner(TokenStream2::from(attr), body))
+}
+
 fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream2> {
     let class = match item {
         venial::Item::Struct(class) => class,
@@ -1672,4 +1682,475 @@ fn build_instance_wrapper(
             }
         }
     }
+}
+
+struct InjectedField {
+    name: proc_macro2::Ident,
+    ty: TokenStream2,
+}
+
+fn split_top_level_commas(input: TokenStream2) -> Vec<TokenStream2> {
+    use proc_macro2::TokenTree;
+    let mut out: Vec<Vec<TokenTree>> = Vec::new();
+    let mut current: Vec<TokenTree> = Vec::new();
+    let mut depth: i32 = 0;
+    for tt in input.into_iter() {
+        match &tt {
+            TokenTree::Punct(p) if p.as_char() == ',' && depth == 0 => {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+            TokenTree::Punct(p) if p.as_char() == '<' => {
+                depth += 1;
+                current.push(tt);
+            }
+            TokenTree::Punct(p) if p.as_char() == '>' => {
+                depth -= 1;
+                current.push(tt);
+            }
+            _ => current.push(tt),
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out.into_iter().map(|toks| toks.into_iter().collect()).collect()
+}
+
+fn inject_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream2> {
+    use proc_macro2::{Literal, Span, TokenTree};
+    use quote::spanned::Spanned;
+
+    let class = match item {
+        venial::Item::Struct(s) => s,
+        other => {
+            return Err(venial::Error::new_at_span(
+                other.__span(),
+                "#[unity2::inject] can only be applied to structs",
+            ));
+        }
+    };
+
+    let class_ident = class.name.clone();
+    let vis = class.vis_marker.clone();
+
+    let mut parser = crate::util::KvParser::parse_args("inject", attr, Span::call_site())?;
+
+    let namespace = parser
+        .handle_literal("namespace", "string")?
+        .map(|lit| crate::data_models::field::unquote_string_literal(&lit.to_string()))
+        .ok_or_else(|| {
+            venial::Error::new_at_span(
+                class_ident.__span(),
+                "#[unity2::inject(...)] requires `namespace = \"...\"`",
+            )
+        })?;
+
+    let name = parser
+        .handle_literal("name", "string")?
+        .map(|lit| crate::data_models::field::unquote_string_literal(&lit.to_string()))
+        .ok_or_else(|| {
+            venial::Error::new_at_span(
+                class_ident.__span(),
+                "#[unity2::inject(...)] requires `name = \"...\"`",
+            )
+        })?;
+
+    let parent_expr = parser.handle_expr_required("parent")?;
+
+    parser.finish()?;
+
+    let mut with_modules: Vec<TokenStream2> = Vec::new();
+    for attr in class.attributes.iter().filter(|a| crate::util::path_is_single(&a.path, "with")) {
+        let tokens: TokenStream2 = attr.value.get_value_tokens().iter().cloned().collect();
+        with_modules.extend(split_top_level_commas(tokens));
+    }
+
+    let injected_fields: Vec<InjectedField> = match &class.fields {
+        venial::Fields::Unit => Vec::new(),
+        venial::Fields::Named(named) => named
+            .fields
+            .iter()
+            .map(|(field, _)| InjectedField {
+                name: field.name.clone(),
+                ty: field.ty.tokens.iter().cloned().collect(),
+            })
+            .collect(),
+        venial::Fields::Tuple(_) => {
+            return Err(venial::Error::new_at_span(
+                class_ident.__span(),
+                "#[unity2::inject] expects either a unit struct or a named-field struct (not a tuple struct)",
+            ));
+        }
+    };
+
+    let passthrough_attrs: Vec<&venial::Attribute> = class
+        .attributes
+        .iter()
+        .filter(|a| {
+            !crate::util::path_is_single(&a.path, "inject")
+                && !crate::util::path_is_single(&a.path, "with")
+        })
+        .collect();
+
+    let parent_tokens: Vec<TokenTree> = parent_expr.clone().into_iter().collect();
+    let base_idx = parent_tokens
+        .iter()
+        .rposition(|t| matches!(t, TokenTree::Ident(_)))
+        .ok_or_else(|| {
+            venial::Error::new_at_span(
+                class_ident.__span(),
+                "#[inject(parent = ...)] must end with a type identifier",
+            )
+        })?;
+    let base_ident = match &parent_tokens[base_idx] {
+        TokenTree::Ident(i) => i.clone(),
+        _ => unreachable!(),
+    };
+    let ancestor_macro_ident = format_ident!("__{}_ancestor_impls", base_ident);
+
+    let crate_prefix: TokenStream2 = {
+        let is_colon = |t: Option<&TokenTree>| {
+            matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == ':')
+        };
+        let mut out: Vec<TokenTree> = Vec::new();
+        let mut i = 0usize;
+        if is_colon(parent_tokens.get(0)) && is_colon(parent_tokens.get(1)) {
+            out.push(parent_tokens[0].clone());
+            out.push(parent_tokens[1].clone());
+            i = 2;
+        }
+        if matches!(parent_tokens.get(i), Some(TokenTree::Ident(_))) {
+            out.push(parent_tokens[i].clone());
+            i += 1;
+            if is_colon(parent_tokens.get(i)) && is_colon(parent_tokens.get(i + 1)) {
+                out.push(parent_tokens[i].clone());
+                out.push(parent_tokens[i + 1].clone());
+            }
+        }
+        out.into_iter().collect()
+    };
+
+    let parent_module: TokenStream2 = {
+        let mut prefix_end = base_idx;
+        while prefix_end > 0
+            && matches!(parent_tokens.get(prefix_end - 1), Some(TokenTree::Punct(p)) if p.as_char() == ':')
+        {
+            prefix_end -= 1;
+        }
+        parent_tokens[..prefix_end].iter().cloned().collect()
+    };
+
+    let raw_cascade: TokenStream2 = if crate_prefix.is_empty() {
+        quote! { #ancestor_macro_ident!(#class_ident); }
+    } else {
+        quote! { #crate_prefix #ancestor_macro_ident!(#class_ident); }
+    };
+
+    let with_imports = with_modules.iter().map(|m| {
+        quote! { #[allow(unused_imports)] use #m::*; }
+    });
+    let parent_module_import: TokenStream2 = if parent_module.is_empty() {
+        TokenStream2::new()
+    } else {
+        quote! { #[allow(unused_imports)] use #parent_module::*; }
+    };
+    let inheritance_invocation: TokenStream2 = quote! {
+        const _: () = {
+            #parent_module_import
+            #(#with_imports)*
+            #raw_cascade
+        };
+    };
+
+    let namespace_cstr = Literal::byte_string(format!("{}\0", namespace).as_bytes());
+    let name_cstr = Literal::byte_string(format!("{}\0", name).as_bytes());
+
+    let extra_bytes_const: TokenStream2 = if injected_fields.is_empty() {
+        quote! { 0u32 }
+    } else {
+        let field_size_terms = injected_fields.iter().map(|f| {
+            let ty = &f.ty;
+            quote! {
+                __off = __align_up(__off, ::core::mem::align_of::<#ty>())
+                    + ::core::mem::size_of::<#ty>();
+            }
+        });
+        quote! {
+            {
+                const fn __align_up(off: usize, align: usize) -> usize {
+                    (off + align - 1) & !(align - 1)
+                }
+                let mut __off: usize = 0;
+                #(#field_size_terms)*
+                __align_up(__off, 8) as u32
+            }
+        }
+    };
+
+    let field_accessors_block: TokenStream2 = if injected_fields.is_empty() {
+        TokenStream2::new()
+    } else {
+        let mut field_items: Vec<TokenStream2> = Vec::new();
+
+        for (i, f) in injected_fields.iter().enumerate() {
+            let getter = f.name.clone();
+            let setter = format_ident!("set_{}", f.name);
+            let offset_fn = format_ident!("__{}_offset", f.name);
+            let ty = &f.ty;
+
+            let prev_terms = injected_fields[..i].iter().map(|prev| {
+                let pty = &prev.ty;
+                quote! {
+                    let __a = ::core::mem::align_of::<#pty>();
+                    __off = (__off + __a - 1) & !(__a - 1);
+                    __off += ::core::mem::size_of::<#pty>();
+                }
+            });
+
+            field_items.push(quote! {
+                #[inline]
+                fn #offset_fn() -> usize {
+                    let mut __off: usize =
+                        <#parent_expr as ::unity2::ClassIdentity>::class().instance_size() as usize;
+                    #(#prev_terms)*
+                    let __a = ::core::mem::align_of::<#ty>();
+                    (__off + __a - 1) & !(__a - 1)
+                }
+
+                #[inline]
+                pub fn #getter(self) -> #ty {
+                    ::unity2::field_get_value_at_offset(self, #class_ident::#offset_fn())
+                }
+
+                #[inline]
+                pub fn #setter(self, value: #ty) {
+                    ::unity2::field_set_value_at_offset(self, #class_ident::#offset_fn(), value);
+                }
+            });
+        }
+
+        let field_descriptors = injected_fields.iter().map(|f| {
+            let fname = &f.name;
+            let pname_lit = Literal::byte_string(format!("{}\0", fname).as_bytes());
+            let offset_fn = format_ident!("__{}_offset", fname);
+            let ty = &f.ty;
+            quote! {
+                ::unity2::injection::InjectedFieldDescriptor {
+                    name: unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked(#pname_lit) },
+                    ty: <#ty as ::unity2::IlType>::il_type(),
+                    offset: #class_ident::#offset_fn() as u32,
+                }
+            }
+        });
+
+        quote! {
+            impl #class_ident {
+                #(#field_items)*
+
+                pub fn __injected_fields() -> ::std::vec::Vec<::unity2::injection::InjectedFieldDescriptor> {
+                    ::std::vec![
+                        #(#field_descriptors),*
+                    ]
+                }
+            }
+        }
+    };
+
+    Ok(quote! {
+        #(#passthrough_attrs)*
+        #[repr(transparent)]
+        #[derive(::core::clone::Clone, ::core::marker::Copy)]
+        #vis struct #class_ident(::unity2::IlInstance);
+
+        impl ::core::convert::From<#class_ident> for ::unity2::IlInstance {
+            #[inline]
+            fn from(value: #class_ident) -> Self {
+                value.0
+            }
+        }
+
+        impl ::core::convert::AsRef<::unity2::IlInstance> for #class_ident {
+            #[inline]
+            fn as_ref(&self) -> &::unity2::IlInstance {
+                &self.0
+            }
+        }
+
+        impl ::unity2::ClassIdentity for #class_ident {
+            const NAMESPACE: &'static str = #namespace;
+            const NAME: &'static str = #name;
+
+            fn class() -> ::unity2::Class {
+                *<Self as ::unity2::injection::InjectedClass>::cache()
+                    .get()
+                    .expect(concat!(
+                        "<",
+                        stringify!(#class_ident),
+                        " as ClassIdentity>::class() called before injection registration",
+                    ))
+            }
+        }
+
+        impl ::unity2::FromIlInstance for #class_ident {
+            #[inline]
+            fn from_il_instance(instance: ::unity2::IlInstance) -> Self {
+                Self(instance)
+            }
+        }
+
+        impl ::unity2::IlType for #class_ident {
+            fn il_type() -> &'static ::unity2::il2cpp::Il2CppType {
+                &<Self as ::unity2::ClassIdentity>::class().raw()._1.byval_arg
+            }
+        }
+
+        impl ::unity2::injection::InjectedClass for #class_ident {
+            type Parent = #parent_expr;
+            const EXTRA_BYTES: u32 = #extra_bytes_const;
+
+            fn class_builder() -> ::unity2::injection::ClassBuilder<Self::Parent> {
+                const NAME_CSTR: &'static ::core::ffi::CStr = match ::core::ffi::CStr::from_bytes_with_nul(#name_cstr) {
+                    ::core::result::Result::Ok(s) => s,
+                    ::core::result::Result::Err(_) => panic!("invalid CStr literal in #[unity2::inject]"),
+                };
+                const NAMESPACE_CSTR: &'static ::core::ffi::CStr = match ::core::ffi::CStr::from_bytes_with_nul(#namespace_cstr) {
+                    ::core::result::Result::Ok(s) => s,
+                    ::core::result::Result::Err(_) => panic!("invalid CStr literal in #[unity2::inject]"),
+                };
+                ::unity2::injection::ClassBuilder::<Self::Parent>::new(NAMESPACE_CSTR, NAME_CSTR)
+                    .extra_bytes(<Self as ::unity2::injection::InjectedClass>::EXTRA_BYTES)
+            }
+
+            fn cache() -> &'static ::std::sync::OnceLock<::unity2::Class> {
+                static CACHE: ::std::sync::OnceLock<::unity2::Class> = ::std::sync::OnceLock::new();
+                &CACHE
+            }
+        }
+
+        #inheritance_invocation
+
+        #field_accessors_block
+    })
+}
+
+fn injected_methods_inner(
+    _attr: TokenStream2,
+    item: venial::Item,
+) -> ParseResult<TokenStream2> {
+    use proc_macro2::Literal;
+
+    let impl_block = match item {
+        venial::Item::Impl(i) => i,
+        _ => {
+            return Err(venial::Error::new(
+                "#[unity2::injected_methods] requires an inherent `impl` block",
+            ));
+        }
+    };
+
+    if impl_block.trait_ty.is_some() {
+        return Err(venial::Error::new(
+            "#[unity2::injected_methods] does not support trait impls; use `impl Foo { ... }`",
+        ));
+    }
+
+    let self_ty = impl_block.self_ty.clone();
+    let self_ident = util::extract_typename(&self_ty)
+        .map(|seg| seg.ident)
+        .ok_or_else(|| {
+            venial::Error::new(
+                "#[unity2::injected_methods] requires `impl Foo {...}` (single type ident)",
+            )
+        })?;
+
+    let mut shims: Vec<TokenStream2> = Vec::new();
+    let mut descriptors: Vec<TokenStream2> = Vec::new();
+
+    for member in &impl_block.body_items {
+        let func = match member {
+            venial::ImplMember::AssocFunction(f) => f,
+            _ => {
+                return Err(venial::Error::new(
+                    "#[unity2::injected_methods] only supports function items",
+                ));
+            }
+        };
+
+        let fn_ident = &func.name;
+        let shim_ident = format_ident!("__inject_shim_{}_{}", self_ident, fn_ident);
+        let il2cpp_name_lit = Literal::byte_string(format!("{}\0", fn_ident).as_bytes());
+
+        let mut typed_params: Vec<(proc_macro2::Ident, TokenStream2)> = Vec::new();
+        let mut has_receiver = false;
+        for (param, _) in func.params.inner.iter() {
+            match param {
+                venial::FnParam::Receiver(_) => {
+                    has_receiver = true;
+                }
+                venial::FnParam::Typed(t) => {
+                    let ty_tokens: TokenStream2 = t.ty.tokens.iter().cloned().collect();
+                    typed_params.push((t.name.clone(), ty_tokens));
+                }
+            }
+        }
+        if !has_receiver {
+            return Err(venial::Error::new(
+                "#[unity2::injected_methods] functions must take `self` as the receiver",
+            ));
+        }
+
+        let return_ty_tokens: TokenStream2 = match &func.return_ty {
+            Some(rt) => rt.tokens.iter().cloned().collect(),
+            None => quote! { () },
+        };
+
+        let shim_param_decls = typed_params.iter().map(|(n, t)| quote! { #n: #t });
+        let shim_call_args = typed_params.iter().map(|(n, _)| quote! { #n });
+
+        shims.push(quote! {
+            #[allow(non_snake_case, unused_variables)]
+            extern "C" fn #shim_ident(
+                this: #self_ty,
+                #(#shim_param_decls,)*
+                _mi: ::unity2::OptionalMethod,
+            ) -> #return_ty_tokens {
+                <#self_ty>::#fn_ident(this, #(#shim_call_args),*)
+            }
+        });
+
+        let param_descriptors = typed_params.iter().map(|(n, t)| {
+            let pname_lit = Literal::byte_string(format!("{}\0", n).as_bytes());
+            quote! {
+                ::unity2::injection::InjectedParameterDescriptor {
+                    name: unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked(#pname_lit) },
+                    ty: <#t as ::unity2::IlType>::il_type(),
+                }
+            }
+        });
+
+        descriptors.push(quote! {
+            ::unity2::injection::InjectedMethodDescriptor {
+                name: unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked(#il2cpp_name_lit) },
+                method_ptr: #shim_ident as *mut u8,
+                return_type: <#return_ty_tokens as ::unity2::IlType>::il_type(),
+                parameters: ::std::vec![#(#param_descriptors),*],
+            }
+        });
+    }
+
+    Ok(quote! {
+        #impl_block
+
+        #(#shims)*
+
+        impl #self_ty {
+            pub fn __injected_methods() -> ::std::vec::Vec<::unity2::injection::InjectedMethodDescriptor> {
+                ::std::vec![
+                    #(#descriptors),*
+                ]
+            }
+        }
+    })
 }

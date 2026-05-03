@@ -1,3 +1,4 @@
+use std::ffi::CStr;
 use std::sync::OnceLock;
 
 use crate::il2cpp::{api, FieldInfo, Il2CppClass, MethodInfo, PropertyInfo};
@@ -69,6 +70,37 @@ impl Class {
 
     pub fn namespace(self) -> String {
         self.raw().get_namespace()
+    }
+
+    pub fn instance_size(self) -> u32 {
+        self.raw()._2.instance_size
+    }
+
+    pub fn set_name(self, name: &'static CStr, namespace: &'static CStr) {
+        unsafe {
+            let class_ptr = self.inner as *const Il2CppClass as *mut Il2CppClass;
+            let class1_ptr = ::core::ptr::addr_of_mut!((*class_ptr)._1)
+                as *mut crate::il2cpp::class::Il2CppClass1;
+            crate::il2cpp::class::Il2CppClass1::set_name_ptrs_via_ptr(
+                class1_ptr,
+                name.as_ptr() as *const u8,
+                namespace.as_ptr() as *const u8,
+            );
+        }
+    }
+
+    pub fn set_instance_size(self, size: u32) {
+        unsafe {
+            let raw_ptr = self.inner as *const Il2CppClass as *mut Il2CppClass;
+            ::core::ptr::write_volatile(
+                ::core::ptr::addr_of_mut!((*raw_ptr)._2.instance_size),
+                size,
+            );
+            ::core::ptr::write_volatile(
+                ::core::ptr::addr_of_mut!((*raw_ptr)._2.actual_size),
+                size,
+            );
+        }
     }
 
     pub fn parent(self) -> Option<Class> {

@@ -33,6 +33,7 @@ pub mod class;
 pub mod diag;
 pub mod error;
 pub mod il2cpp;
+pub mod injection;
 pub mod lookup;
 pub mod method;
 pub mod prelude;

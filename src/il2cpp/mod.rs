@@ -20,6 +20,32 @@ pub mod fe_engage {
 
         *OFFSET
     }
+
+    pub fn class_from_name_scan() -> usize {
+        static OFFSET: ::std::sync::LazyLock<usize> = ::std::sync::LazyLock::new(|| {
+            let text = lazysimd::scan::get_text();
+            lazysimd::get_offset_neon(
+                text,
+                "ff c3 02 d1 fd 7b 05 a9 fd 43 01 91 fc 6f 06 a9 fa 67 07 a9 f8 5f 08 a9 f6 57 09 a9 f4 4f 0a a9 f8 03 00 aa 16 0f 43 f8 f9 03 02 aa f4 03 01 aa",
+            )
+            .expect("il2cpp_class_from_name pattern scan failed")
+        });
+
+        *OFFSET
+    }
+
+    pub fn class_from_il2cpptype_scan() -> usize {
+        static OFFSET: ::std::sync::LazyLock<usize> = ::std::sync::LazyLock::new(|| {
+            let text = lazysimd::scan::get_text();
+            lazysimd::get_offset_neon(
+                text,
+                "ff 03 01 d1 fd 7b 01 a9 fd 43 00 91 f6 57 02 a9 f4 4f 03 a9 f3 03 00 aa e0 03 1f aa 68 2a 40 39 08 05 00 51 1f 75 00 71",
+            )
+            .expect("il2cpp_class_from_il2cpptype pattern scan failed")
+        });
+
+        *OFFSET
+    }
 }
 
 #[repr(C)]
