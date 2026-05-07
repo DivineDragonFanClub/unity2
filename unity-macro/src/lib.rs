@@ -1669,15 +1669,22 @@ fn build_instance_wrapper(
         }
     };
 
+    let vis = if is_value_type {
+        let v = &m.vis;
+        quote! { #v }
+    } else {
+        quote! {}
+    };
+
     if m.is_unsafe {
         quote! {
-            unsafe fn #name(self, #(#typed_params),*) #ret {
+            #vis unsafe fn #name(self, #(#typed_params),*) #ret {
                 #body
             }
         }
     } else {
         quote! {
-            fn #name(self, #(#typed_params),*) #ret {
+            #vis fn #name(self, #(#typed_params),*) #ret {
                 unsafe { #body }
             }
         }
