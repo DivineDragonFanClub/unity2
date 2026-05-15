@@ -1,6 +1,7 @@
 pub mod api;
 pub mod assembly;
 pub mod class;
+pub mod generic;
 pub mod method;
 
 pub use class::{FieldInfo, Il2CppClass, Il2CppReflectionType, PropertyInfo, VirtualInvoke};
@@ -94,12 +95,18 @@ pub const TYPE_MVAR: u8 = 0x1e;
 
 #[repr(C)]
 pub struct Il2CppGenericClass {
-    _opaque: [u8; 0],
+    pub r#type: *const Il2CppType,
+    pub context: generic::Il2CppGenericContext,
+    pub cached_class: Option<&'static Il2CppClass>,
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct Il2CppGenericContainer {
-    _opaque: [u8; 0],
+    pub owner: i32,
+    pub type_argc: i32,
+    pub is_method: i32,
+    pub generic_parameter_start: i32,
 }
 
 #[repr(C)]
