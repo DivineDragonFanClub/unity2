@@ -454,6 +454,24 @@ impl<T: Copy + ClassIdentity> Array<T> {
     }
 }
 
+impl<T: Copy + ClassIdentity> From<&[T]> for Array<T> {
+    fn from(src: &[T]) -> Self {
+        Array::from_slice(src).expect("Array::from(&[T]): allocation failed")
+    }
+}
+
+impl<T: Copy + ClassIdentity, const N: usize> From<[T; N]> for Array<T> {
+    fn from(src: [T; N]) -> Self {
+        Array::from_slice(&src).expect("Array::from([T; N]): allocation failed")
+    }
+}
+
+impl<T: Copy + ClassIdentity> From<Vec<T>> for Array<T> {
+    fn from(src: Vec<T>) -> Self {
+        Array::from_slice(&src).expect("Array::from(Vec<T>): allocation failed")
+    }
+}
+
 impl<T: Copy> IntoIterator for Array<T> {
     type Item = T;
     type IntoIter = ArrayIter<T>;
