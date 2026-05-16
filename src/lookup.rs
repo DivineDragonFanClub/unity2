@@ -173,9 +173,6 @@ fn il2cpp_type_eq(a: &Il2CppType, b: &Il2CppType) -> bool {
     if std::ptr::eq(a as *const _, b as *const _) {
         return true;
     }
-    if a.byref() != b.byref() {
-        return false;
-    }
     if (a.type_enum() == crate::il2cpp::TYPE_OBJECT && is_reference_type_enum(b.type_enum()))
         || (b.type_enum() == crate::il2cpp::TYPE_OBJECT && is_reference_type_enum(a.type_enum()))
     {
