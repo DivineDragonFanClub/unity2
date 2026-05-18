@@ -277,6 +277,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
     };
     let own_from_impl = if type_param_idents.is_empty() {
         quote! {
+            #[doc(hidden)]
             impl ::core::convert::From<$child> for #class_ident {
                 fn from(value: $child) -> Self {
                     <Self as ::unity2::FromIlInstance>::from_il_instance(
@@ -288,6 +289,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
     } else {
         let gens = gen_meta_idents.iter().map(|g| quote! { $#g });
         quote! {
+            #[doc(hidden)]
             impl ::core::convert::From<$child> for #class_ident<#(#gens),*> {
                 fn from(value: $child) -> Self {
                     <Self as ::unity2::FromIlInstance>::from_il_instance(
@@ -427,6 +429,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
                 let trait_ident = format_ident!("I{}", base);
                 quote! {
                     impl #impl_generics #prefix #trait_ident #generics for #class_ident #type_generics {}
+                    #[doc(hidden)]
                     impl #impl_generics ::core::convert::From<#class_ident #type_generics>
                         for #prefix #base #generics
                     {
@@ -550,12 +553,14 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         #[derive(::core::clone::Clone, ::core::marker::Copy)]
         #vis struct #class_ident #impl_generics(::unity2::IlInstance #phantom_field_decl);
 
+        #[doc(hidden)]
         impl #impl_generics ::core::convert::From<#class_ident #type_generics> for ::unity2::IlInstance {
             fn from(value: #class_ident #type_generics) -> Self {
                 value.0
             }
         }
 
+        #[doc(hidden)]
         impl #impl_generics ::core::convert::AsRef<::unity2::IlInstance> for #class_ident #type_generics {
             fn as_ref(&self) -> &::unity2::IlInstance {
                 &self.0
