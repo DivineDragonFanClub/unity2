@@ -7,7 +7,7 @@ repository = "https://github.com/DivineDragonFanClub/unity2"
 
 [dependencies]
 skyline = "0.6"
-lazysimd = { git = "https://github.com/Raytwo/lazysimd" }
+lazysimd = "0.1"
 unity-macro = { path = "./unity-macro" }
 
 [features]
