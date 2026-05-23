@@ -16,7 +16,7 @@ pub fn peek_method(
         })?;
 
     let method_ptr = method.method_ptr;
-    let text = lazysimd::scan::get_text();
+    let text = crate::scan::get_text();
     let offset = unsafe { (method_ptr as *const u8).offset_from(text.as_ptr()) as isize };
 
     let mut insns = [0u32; 4];

@@ -1,6 +1,7 @@
 pub mod api;
 pub mod assembly;
 pub mod class;
+pub mod generic;
 pub mod method;
 
 pub use class::{FieldInfo, Il2CppClass, Il2CppReflectionType, PropertyInfo, VirtualInvoke};
@@ -10,7 +11,7 @@ pub use method::{MethodInfo, OptionalMethod, ParameterInfo};
 pub mod fe_engage {
     pub fn il2cpp_init_scan() -> usize {
         static OFFSET: ::std::sync::LazyLock<usize> = ::std::sync::LazyLock::new(|| {
-            let text = lazysimd::scan::get_text();
+            let text = crate::scan::get_text();
             lazysimd::get_offset_neon(
                 text,
                 "fd 7b be a9 f3 0b 00 f9 fd 03 00 91 f3 03 00 aa ?? ?? ?? ?? ?? ?? ?? ?? c0 00 80 52 ?? ?? ?? ?? e0 03 13 aa ?? ?? ?? ?? f3 0b 40 f9 00 00 00 12 fd 7b c2 a8 c0 03 5f d6",
@@ -23,7 +24,7 @@ pub mod fe_engage {
 
     pub fn class_from_name_scan() -> usize {
         static OFFSET: ::std::sync::LazyLock<usize> = ::std::sync::LazyLock::new(|| {
-            let text = lazysimd::scan::get_text();
+            let text = crate::scan::get_text();
             lazysimd::get_offset_neon(
                 text,
                 "ff c3 02 d1 fd 7b 05 a9 fd 43 01 91 fc 6f 06 a9 fa 67 07 a9 f8 5f 08 a9 f6 57 09 a9 f4 4f 0a a9 f8 03 00 aa 16 0f 43 f8 f9 03 02 aa f4 03 01 aa",
@@ -36,7 +37,7 @@ pub mod fe_engage {
 
     pub fn class_from_il2cpptype_scan() -> usize {
         static OFFSET: ::std::sync::LazyLock<usize> = ::std::sync::LazyLock::new(|| {
-            let text = lazysimd::scan::get_text();
+            let text = crate::scan::get_text();
             lazysimd::get_offset_neon(
                 text,
                 "ff 03 01 d1 fd 7b 01 a9 fd 43 00 91 f6 57 02 a9 f4 4f 03 a9 f3 03 00 aa e0 03 1f aa 68 2a 40 39 08 05 00 51 1f 75 00 71",
@@ -120,12 +121,18 @@ pub const TYPE_MVAR: u8 = 0x1e;
 
 #[repr(C)]
 pub struct Il2CppGenericClass {
-    _opaque: [u8; 0],
+    pub r#type: *const Il2CppType,
+    pub context: generic::Il2CppGenericContext,
+    pub cached_class: Option<&'static Il2CppClass>,
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct Il2CppGenericContainer {
-    _opaque: [u8; 0],
+    pub owner: i32,
+    pub type_argc: i32,
+    pub is_method: i32,
+    pub generic_parameter_start: i32,
 }
 
 #[repr(C)]

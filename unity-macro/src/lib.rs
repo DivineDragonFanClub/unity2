@@ -1,7 +1,13 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote};
+mod from_pattern;
 mod util;
+
+#[proc_macro_attribute]
+pub fn from_pattern(attr: TokenStream, item: TokenStream) -> TokenStream {
+    translate(item, |body| from_pattern::expand(TokenStream2::from(attr), body))
+}
 
 mod data_models {
     pub mod class_attrs;
@@ -287,6 +293,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
     };
     let own_from_impl = if type_param_idents.is_empty() {
         quote! {
+            #[doc(hidden)]
             impl ::core::convert::From<$child> for #class_ident {
                 fn from(value: $child) -> Self {
                     <Self as ::unity2::FromIlInstance>::from_il_instance(
@@ -298,6 +305,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
     } else {
         let gens = gen_meta_idents.iter().map(|g| quote! { $#g });
         quote! {
+            #[doc(hidden)]
             impl ::core::convert::From<$child> for #class_ident<#(#gens),*> {
                 fn from(value: $child) -> Self {
                     <Self as ::unity2::FromIlInstance>::from_il_instance(
@@ -437,6 +445,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
                 let trait_ident = format_ident!("I{}", base);
                 quote! {
                     impl #impl_generics #prefix #trait_ident #generics for #class_ident #type_generics {}
+                    #[doc(hidden)]
                     impl #impl_generics ::core::convert::From<#class_ident #type_generics>
                         for #prefix #base #generics
                     {
@@ -560,12 +569,14 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         #[derive(::core::clone::Clone, ::core::marker::Copy)]
         #vis struct #class_ident #impl_generics(::unity2::IlInstance #phantom_field_decl);
 
+        #[doc(hidden)]
         impl #impl_generics ::core::convert::From<#class_ident #type_generics> for ::unity2::IlInstance {
             fn from(value: #class_ident #type_generics) -> Self {
                 value.0
             }
         }
 
+        #[doc(hidden)]
         impl #impl_generics ::core::convert::AsRef<::unity2::IlInstance> for #class_ident #type_generics {
             fn as_ref(&self) -> &::unity2::IlInstance {
                 &self.0
@@ -1236,7 +1247,7 @@ fn methods_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStr
                 quote! {},
             ),
             Resolution::Pattern(s) => (
-                quote! { #[::lazysimd::from_pattern(#s)] },
+                quote! { #[::unity_macro::from_pattern(#s)] },
                 quote! {},
             ),
             Resolution::Name { name: il_name, args } => {
@@ -1281,7 +1292,7 @@ fn methods_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStr
                             }
                             pub fn get_offset() -> usize {
                                 let method_ptr = get_method_info().method_ptr;
-                                let text = ::lazysimd::scan::get_text();
+                                let text = ::unity2::scan::get_text();
                                 unsafe {
                                     (method_ptr as *const u8).offset_from(text.as_ptr()) as usize
                                 }
@@ -1318,7 +1329,7 @@ fn methods_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStr
                         }
                         pub fn get_offset() -> usize {
                             let method_ptr = get_method_info().method_ptr;
-                            let text = ::lazysimd::scan::get_text();
+                            let text = ::unity2::scan::get_text();
                             unsafe {
                                 (method_ptr as *const u8).offset_from(text.as_ptr()) as usize
                             }
@@ -1412,6 +1423,22 @@ fn type_has_reference(ty: &venial::TypeExpr) -> bool {
     })
 }
 
+fn type_is_mut_pointer(ty: &venial::TypeExpr) -> Option<TokenStream2> {
+    let mut iter = ty.tokens.iter();
+    let first = iter.next()?;
+    let proc_macro2::TokenTree::Punct(p) = first else { return None };
+    if p.as_char() != '*' {
+        return None;
+    }
+    let second = iter.next()?;
+    let proc_macro2::TokenTree::Ident(id) = second else { return None };
+    if id != "mut" {
+        return None;
+    }
+    let inner: TokenStream2 = iter.cloned().collect();
+    if inner.is_empty() { None } else { Some(inner) }
+}
+
 fn method_info_expr(_m: &Method, _raw_mod: &proc_macro2::Ident) -> TokenStream2 {
     quote! { ::core::option::Option::None }
 }
@@ -1419,40 +1446,97 @@ fn method_info_expr(_m: &Method, _raw_mod: &proc_macro2::Ident) -> TokenStream2 
 fn build_static_wrapper(m: &Method, raw_mod: &proc_macro2::Ident) -> TokenStream2 {
     let name = &m.name;
     let vis = &m.vis;
-    let typed_params = m.params.iter().map(|p| {
-        let pname = &p.name;
-        let pty = &p.ty;
-        if type_has_reference(pty) {
-            quote! { #pname: #pty }
+
+    let mut typed_params: Vec<TokenStream2> = Vec::new();
+    let mut arg_exprs: Vec<TokenStream2> = Vec::new();
+    let mut slot_inits: Vec<TokenStream2> = Vec::new();
+    let mut slot_reads: Vec<TokenStream2> = Vec::new();
+    let mut out_inner_tys: Vec<TokenStream2> = Vec::new();
+    for p in m.params.iter() {
+        if let Some(inner) = type_is_mut_pointer(&p.ty) {
+            let slot = proc_macro2::Ident::new(
+                &format!("__out_{}", out_inner_tys.len()),
+                proc_macro2::Span::call_site(),
+            );
+            slot_inits.push(quote! {
+                let mut #slot = ::core::mem::MaybeUninit::<#inner>::uninit();
+            });
+            arg_exprs.push(quote! { #slot.as_mut_ptr() });
+            slot_reads.push(quote! { #slot.assume_init() });
+            out_inner_tys.push(inner);
         } else {
-            quote! { #pname: impl ::core::convert::Into<#pty> }
+            let pname = &p.name;
+            let pty = &p.ty;
+            if type_has_reference(pty) {
+                typed_params.push(quote! { #pname: #pty });
+                arg_exprs.push(quote! { #pname });
+            } else {
+                typed_params.push(quote! { #pname: impl ::core::convert::Into<#pty> });
+                arg_exprs.push(quote! { ::core::convert::Into::into(#pname) });
+            }
         }
-    });
-    let arg_exprs = m.params.iter().map(|p| {
-        let pname = &p.name;
-        if type_has_reference(&p.ty) {
-            quote! { #pname }
-        } else {
-            quote! { ::core::convert::Into::into(#pname) }
+    }
+
+    let ret = match (&m.return_ty, out_inner_tys.len()) {
+        (None, 0) => quote! {},
+        (Some(r), 0) => quote! { -> #r },
+        (None, 1) => {
+            let t = &out_inner_tys[0];
+            quote! { -> #t }
         }
-    });
-    let ret = match &m.return_ty {
-        Some(t) => quote! { -> #t },
-        None => quote! {},
+        (None, _) => {
+            let tys = &out_inner_tys;
+            quote! { -> (#(#tys),*) }
+        }
+        (Some(r), 1) => {
+            let t = &out_inner_tys[0];
+            quote! { -> (#r, #t) }
+        }
+        (Some(r), _) => {
+            let tys = &out_inner_tys;
+            quote! { -> (#r, #(#tys),*) }
+        }
     };
+
     let mi_expr = method_info_expr(m, raw_mod);
     let call = quote! { #raw_mod::#name(#(#arg_exprs,)* #mi_expr) };
+    let body = match (&m.return_ty, out_inner_tys.len()) {
+        (None, 0) | (Some(_), 0) => call,
+        (None, 1) => quote! {
+            #(#slot_inits)*
+            #call;
+            #(#slot_reads)*
+        },
+        (None, _) => quote! {
+            #(#slot_inits)*
+            #call;
+            (#(#slot_reads),*)
+        },
+        (Some(_), 1) => {
+            let read = &slot_reads[0];
+            quote! {
+                #(#slot_inits)*
+                let __ret = { #call };
+                (__ret, #read)
+            }
+        }
+        (Some(_), _) => quote! {
+            #(#slot_inits)*
+            let __ret = { #call };
+            (__ret, #(#slot_reads),*)
+        },
+    };
 
     if m.is_unsafe {
         quote! {
             #vis unsafe fn #name(#(#typed_params),*) #ret {
-                #call
+                #body
             }
         }
     } else {
         quote! {
             #vis fn #name(#(#typed_params),*) #ret {
-                unsafe { #call }
+                unsafe { #body }
             }
         }
     }
@@ -1506,53 +1590,62 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
     };
     let il2cpp_name_lit = il2cpp_name.as_str();
 
-    // Rust-facing signature keeps &mut V, Sig and extern fn use raw pointers (same ABI)
-    let typed_params = m.params.iter().map(|p| {
+    let mut typed_params: Vec<TokenStream2> = Vec::new();
+    let mut call_exprs: Vec<TokenStream2> = Vec::new();
+    let mut abi_types: Vec<TokenStream2> = Vec::new();
+    let mut slot_inits: Vec<TokenStream2> = Vec::new();
+    let mut slot_reads: Vec<TokenStream2> = Vec::new();
+    let mut out_inner_tys: Vec<TokenStream2> = Vec::new();
+    for p in m.params.iter() {
+        if let Some(inner) = type_is_mut_pointer(&p.ty) {
+            let slot = proc_macro2::Ident::new(
+                &format!("__out_{}", out_inner_tys.len()),
+                proc_macro2::Span::call_site(),
+            );
+            slot_inits.push(quote! {
+                let mut #slot = ::core::mem::MaybeUninit::<#inner>::uninit();
+            });
+            abi_types.push(quote! { *mut #inner });
+            call_exprs.push(quote! { #slot.as_mut_ptr() });
+            slot_reads.push(quote! { #slot.assume_init() });
+            out_inner_tys.push(inner);
+            continue;
+        }
         let pname = &p.name;
         let pty = &p.ty;
-        quote! { #pname: #pty }
-    });
-
-    struct ParamInfo {
-        name: proc_macro2::TokenStream,
-        abi_ty: proc_macro2::TokenStream,
-        is_ref: bool,
+        typed_params.push(quote! { #pname: #pty });
+        let (abi_ty, is_ref) = reference_to_raw_pointer(&p.ty);
+        abi_types.push(abi_ty.clone());
+        if is_ref {
+            call_exprs.push(quote! { #pname as #abi_ty });
+        } else {
+            call_exprs.push(quote! { #pname });
+        }
     }
-    let param_info: Vec<ParamInfo> = m
-        .params
-        .iter()
-        .map(|p| {
-            let (abi_ty, is_ref) = reference_to_raw_pointer(&p.ty);
-            let pname = &p.name;
-            ParamInfo {
-                name: quote! { #pname },
-                abi_ty,
-                is_ref,
-            }
-        })
-        .collect();
-
-    let abi_types: Vec<_> = param_info.iter().map(|p| p.abi_ty.clone()).collect();
-    let call_exprs: Vec<proc_macro2::TokenStream> = param_info
-        .iter()
-        .map(|p| {
-            if p.is_ref {
-                let name = &p.name;
-                let abi_ty = &p.abi_ty;
-                quote! { #name as #abi_ty }
-            } else {
-                p.name.clone()
-            }
-        })
-        .collect();
 
     let ret_ty = match &m.return_ty {
         Some(t) => quote! { #t },
         None => quote! { () },
     };
-    let ret_clause = match &m.return_ty {
-        Some(t) => quote! { -> #t },
-        None => quote! {},
+    let ret_clause = match (&m.return_ty, out_inner_tys.len()) {
+        (None, 0) => quote! {},
+        (Some(r), 0) => quote! { -> #r },
+        (None, 1) => {
+            let t = &out_inner_tys[0];
+            quote! { -> #t }
+        }
+        (None, _) => {
+            let tys = &out_inner_tys;
+            quote! { -> (#(#tys),*) }
+        }
+        (Some(r), 1) => {
+            let t = &out_inner_tys[0];
+            quote! { -> (#r, #t) }
+        }
+        (Some(r), _) => {
+            let tys = &out_inner_tys;
+            quote! { -> (#r, #(#tys),*) }
+        }
     };
 
     let extern_fn_ty = if m.is_static {
@@ -1596,6 +1689,29 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
 
     let il2cpp_arg_count = m.params.len();
 
+    let final_expr = match (&m.return_ty, out_inner_tys.len()) {
+        (None, 0) | (Some(_), 0) => quote! { __f(#call_args) },
+        (None, 1) => quote! {
+            __f(#call_args);
+            unsafe { #(#slot_reads)* }
+        },
+        (None, _) => quote! {
+            __f(#call_args);
+            unsafe { (#(#slot_reads),*) }
+        },
+        (Some(_), 1) => {
+            let read = &slot_reads[0];
+            quote! {
+                let __ret = __f(#call_args);
+                (__ret, unsafe { #read })
+            }
+        }
+        (Some(_), _) => quote! {
+            let __ret = __f(#call_args);
+            unsafe { (__ret, #(#slot_reads),*) }
+        },
+    };
+
     quote! {
         #unsafe_kw fn #name(#receiver #(#typed_params),*) #ret_clause #sized_bound {
             static CACHE: ::std::sync::OnceLock<
@@ -1621,7 +1737,8 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
                 })
             };
             let __f: #extern_fn_ty = unsafe { ::std::mem::transmute(__ptr) };
-            __f(#call_args)
+            #(#slot_inits)*
+            #final_expr
         }
     }
 }
@@ -1633,33 +1750,57 @@ fn build_instance_wrapper(
     is_value_type: bool,
 ) -> TokenStream2 {
     let name = &m.name;
-    let typed_params = m.params.iter().map(|p| {
-        let pname = &p.name;
-        let pty = &p.ty;
-        if type_has_reference(pty) {
-            quote! { #pname: #pty }
+
+    let mut typed_params: Vec<TokenStream2> = Vec::new();
+    let mut arg_exprs: Vec<TokenStream2> = Vec::new();
+    let mut slot_inits: Vec<TokenStream2> = Vec::new();
+    let mut slot_reads: Vec<TokenStream2> = Vec::new();
+    let mut out_inner_tys: Vec<TokenStream2> = Vec::new();
+    for p in m.params.iter() {
+        if let Some(inner) = type_is_mut_pointer(&p.ty) {
+            let slot = proc_macro2::Ident::new(
+                &format!("__out_{}", out_inner_tys.len()),
+                proc_macro2::Span::call_site(),
+            );
+            slot_inits.push(quote! {
+                let mut #slot = ::core::mem::MaybeUninit::<#inner>::uninit();
+            });
+            arg_exprs.push(quote! { #slot.as_mut_ptr() });
+            slot_reads.push(quote! { #slot.assume_init() });
+            out_inner_tys.push(inner);
         } else {
-            quote! { #pname: impl ::core::convert::Into<#pty> }
+            let pname = &p.name;
+            let pty = &p.ty;
+            if type_has_reference(pty) {
+                typed_params.push(quote! { #pname: #pty });
+                arg_exprs.push(quote! { #pname });
+            } else {
+                typed_params.push(quote! { #pname: impl ::core::convert::Into<#pty> });
+                arg_exprs.push(quote! { ::core::convert::Into::into(#pname) });
+            }
         }
-    });
-    let arg_exprs = m.params.iter().map(|p| {
-        let pname = &p.name;
-        if type_has_reference(&p.ty) {
-            quote! { #pname }
-        } else {
-            quote! { ::core::convert::Into::into(#pname) }
+    }
+
+    let ret = match (&m.return_ty, out_inner_tys.len()) {
+        (None, 0) => quote! {},
+        (Some(r), 0) => quote! { -> #r },
+        (None, 1) => {
+            let t = &out_inner_tys[0];
+            quote! { -> #t }
         }
-    });
-    let ret = match &m.return_ty {
-        Some(t) => quote! { -> #t },
-        None => quote! {},
+        (None, _) => {
+            let tys = &out_inner_tys;
+            quote! { -> (#(#tys),*) }
+        }
+        (Some(r), _) => {
+            let tys = &out_inner_tys;
+            quote! { -> (#r, #(#tys),*) }
+        }
     };
 
     let mi_expr = method_info_expr(m, raw_mod);
-    let body = if is_value_type {
-        quote! {
-            #raw_mod::#name(self, #(#arg_exprs,)* #mi_expr)
-        }
+    let call_expr = if is_value_type {
+        quote! { #raw_mod::#name(self, #(#arg_exprs,)* #mi_expr) }
     } else {
         quote! {
             let __receiver = <#self_ty as ::unity2::FromIlInstance>::from_il_instance(
@@ -1667,6 +1808,33 @@ fn build_instance_wrapper(
             );
             #raw_mod::#name(__receiver, #(#arg_exprs,)* #mi_expr)
         }
+    };
+
+    let body = match (&m.return_ty, out_inner_tys.len()) {
+        (None, 0) | (Some(_), 0) => call_expr,
+        (None, 1) => quote! {
+            #(#slot_inits)*
+            #call_expr;
+            #(#slot_reads)*
+        },
+        (None, _) => quote! {
+            #(#slot_inits)*
+            #call_expr;
+            (#(#slot_reads),*)
+        },
+        (Some(_), 1) => {
+            let read = &slot_reads[0];
+            quote! {
+                #(#slot_inits)*
+                let __ret = { #call_expr };
+                (__ret, #read)
+            }
+        }
+        (Some(_), _) => quote! {
+            #(#slot_inits)*
+            let __ret = { #call_expr };
+            (__ret, #(#slot_reads),*)
+        },
     };
 
     let vis = if is_value_type {

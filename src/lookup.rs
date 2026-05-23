@@ -53,7 +53,7 @@ pub fn method_offset_by_vtable_index_on_class(
 }
 
 fn method_ptr_to_offset(method_ptr: *mut u8) -> usize {
-    let text = lazysimd::scan::get_text();
+    let text = crate::scan::get_text();
     unsafe { (method_ptr as *const u8).offset_from(text.as_ptr()) as usize }
 }
 
@@ -172,9 +172,6 @@ pub fn method_info_on_class_with_signature(
 fn il2cpp_type_eq(a: &Il2CppType, b: &Il2CppType) -> bool {
     if std::ptr::eq(a as *const _, b as *const _) {
         return true;
-    }
-    if a.byref() != b.byref() {
-        return false;
     }
     if (a.type_enum() == crate::il2cpp::TYPE_OBJECT && is_reference_type_enum(b.type_enum()))
         || (b.type_enum() == crate::il2cpp::TYPE_OBJECT && is_reference_type_enum(a.type_enum()))

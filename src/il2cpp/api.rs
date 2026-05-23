@@ -1,7 +1,5 @@
 use std::sync::OnceLock;
 
-use lazysimd;
-
 use super::{
     assembly::{CppVector, Il2CppAssembly, Il2CppImage},
     class::Il2CppClass,
@@ -18,12 +16,12 @@ fn resolve_offset_with_host_override(name: &[u8], pattern: &str, label: &str) ->
         let f: extern "C" fn() -> usize = unsafe { core::mem::transmute(addr) };
         return f();
     }
-    let text = lazysimd::scan::get_text();
+    let text = crate::scan::get_text();
     lazysimd::get_offset_neon(text, pattern)
         .unwrap_or_else(|| panic!("{label} pattern scan failed and no host override exposed"))
 }
 
-#[lazysimd::from_pattern(
+#[unity_macro::from_pattern(
     "fd 7b be a9 f3 0b 00 f9 fd 03 00 91 f3 03 00 aa ?? ?? ?? ?? ?? ?? ?? ?? c0 00 80 52 ?? ?? ?? ?? e0 03 13 aa ?? ?? ?? ?? f3 0b 40 f9 00 00 00 12 fd 7b c2 a8 c0 03 5f d6"
 )]
 pub(crate) fn init(domain_name: *const i8) -> i32;
@@ -55,7 +53,7 @@ pub(crate) unsafe fn class_from_name(
     f(image, namespace, name)
 }
 
-#[lazysimd::from_pattern(
+#[unity_macro::from_pattern(
     "ff 43 01 d1 fd 7b 01 a9 fd 43 00 91 f8 5f 02 a9 f6 57 03 a9 f4 4f 04 a9 08 c8 44 39 f3 03 03 2a f6 03 02 2a f4 03 01 aa f5 03 00 aa"
 )]
 pub(crate) fn get_method_from_name_flags(
@@ -68,7 +66,7 @@ pub(crate) fn get_method_from_name_flags(
 #[skyline::from_offset(0x42911c)]
 pub(crate) fn assembly_getallassemblies() -> &'static CppVector<&'static Il2CppAssembly>;
 
-#[lazysimd::from_pattern(
+#[unity_macro::from_pattern(
     "ff 03 01 d1 fd 7b 01 a9 fd 43 00 91 f5 13 00 f9 f4 4f 03 a9 ?? ?? ?? ?? ?? ?? ?? ?? a0 0f 00 f9 e0 03 13 aa ff 07 00 f9"
 )]
 pub(crate) fn type_get_object(ty: &Il2CppType) -> SystemType;
@@ -93,13 +91,13 @@ pub unsafe fn class_from_il2cpptype(ty: &Il2CppType) -> Option<&'static mut Il2C
 }
 
 // Required after resolving a class from a generic Il2CppType, finalizes field/method/vtable metadata
-#[lazysimd::from_pattern(
+#[unity_macro::from_pattern(
     "fd 7b bd a9 f5 0b 00 f9 fd 03 00 91 f4 4f 02 a9 08 c8 44 39 08 03 10 37 ?? ?? ?? ?? ?? ?? ?? ?? f3 03 00 aa b5 0f 00 f9"
 )]
 pub(crate) fn class_init(class: &Il2CppClass);
 
 // Sets the class header only, callers still need to invoke a .ctor method
-#[lazysimd::from_pattern(
+#[unity_macro::from_pattern(
     "ff 43 01 d1 fd 7b 01 a9 fd 43 00 91 f7 13 00 f9 f6 57 03 a9 f4 4f 04 a9 08 c8 44 39 f3 03 00 aa e8 02 10 37"
 )]
 pub fn object_new(klass: &Il2CppClass) -> crate::IlInstance;
@@ -108,7 +106,7 @@ pub fn object_new(klass: &Il2CppClass) -> crate::IlInstance;
 #[skyline::from_offset(0x474370)]
 pub(crate) fn gc_malloc_kind(size: usize, kind: u32) -> *mut u8;
 
-#[lazysimd::from_pattern(
+#[unity_macro::from_pattern(
     "fd 7b be a9 f3 0b 00 f9 fd 03 00 91 f3 03 01 aa 21 00 80 52 e2 03 1f 2a ?? ?? ?? ?? e1 03 13 aa f3 0b 40 f9 fd 7b c2 a8"
 )]
 pub(crate) fn array_new<T: Copy>(
@@ -116,7 +114,7 @@ pub(crate) fn array_new<T: Copy>(
     length: usize,
 ) -> crate::Array<T>;
 
-#[lazysimd::from_pattern(
+#[unity_macro::from_pattern(
     "ff 03 01 d1 fd 7b 02 a9 fd 83 00 91 f4 4f 03 a9 f3 03 00 aa ?? ?? ?? ?? 01 7c 40 92 e8 23 00 91 e0 03 13 aa f4 23 00 91 ?? ?? ?? ?? e8 23 40 39 0b fd 41 d3 e9 0f 40 f9"
 )]
 pub(crate) fn string_new(c_str: *const u8) -> crate::Il2CppString;

@@ -37,6 +37,7 @@ pub mod injection;
 pub mod lookup;
 pub mod method;
 pub mod prelude;
+pub mod scan;
 pub mod system;
 
 pub use class::Class;
@@ -452,6 +453,24 @@ impl<T: Copy + ClassIdentity> Array<T> {
         let arr = Self::of_len(src.len())?;
         arr.copy_from_slice(src);
         Some(arr)
+    }
+}
+
+impl<T: Copy + ClassIdentity> From<&[T]> for Array<T> {
+    fn from(src: &[T]) -> Self {
+        Array::from_slice(src).expect("Array::from(&[T]): allocation failed")
+    }
+}
+
+impl<T: Copy + ClassIdentity, const N: usize> From<[T; N]> for Array<T> {
+    fn from(src: [T; N]) -> Self {
+        Array::from_slice(&src).expect("Array::from([T; N]): allocation failed")
+    }
+}
+
+impl<T: Copy + ClassIdentity> From<Vec<T>> for Array<T> {
+    fn from(src: Vec<T>) -> Self {
+        Array::from_slice(&src).expect("Array::from(Vec<T>): allocation failed")
     }
 }
 
