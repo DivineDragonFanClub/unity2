@@ -36,6 +36,7 @@ pub mod il2cpp;
 pub mod lookup;
 pub mod method;
 pub mod prelude;
+pub mod scan;
 pub mod system;
 
 pub use class::Class;

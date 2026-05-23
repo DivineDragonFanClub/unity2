@@ -53,7 +53,7 @@ pub fn method_offset_by_vtable_index_on_class(
 }
 
 fn method_ptr_to_offset(method_ptr: *mut u8) -> usize {
-    let text = lazysimd::scan::get_text();
+    let text = crate::scan::get_text();
     unsafe { (method_ptr as *const u8).offset_from(text.as_ptr()) as usize }
 }
 

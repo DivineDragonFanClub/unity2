@@ -1,7 +1,13 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote};
+mod from_pattern;
 mod util;
+
+#[proc_macro_attribute]
+pub fn from_pattern(attr: TokenStream, item: TokenStream) -> TokenStream {
+    translate(item, |body| from_pattern::expand(TokenStream2::from(attr), body))
+}
 
 mod data_models {
     pub mod class_attrs;
@@ -1231,7 +1237,7 @@ fn methods_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStr
                 quote! {},
             ),
             Resolution::Pattern(s) => (
-                quote! { #[::lazysimd::from_pattern(#s)] },
+                quote! { #[::unity_macro::from_pattern(#s)] },
                 quote! {},
             ),
             Resolution::Name { name: il_name, args } => {
@@ -1276,7 +1282,7 @@ fn methods_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStr
                             }
                             pub fn get_offset() -> usize {
                                 let method_ptr = get_method_info().method_ptr;
-                                let text = ::lazysimd::scan::get_text();
+                                let text = ::unity2::scan::get_text();
                                 unsafe {
                                     (method_ptr as *const u8).offset_from(text.as_ptr()) as usize
                                 }
@@ -1313,7 +1319,7 @@ fn methods_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStr
                         }
                         pub fn get_offset() -> usize {
                             let method_ptr = get_method_info().method_ptr;
-                            let text = ::lazysimd::scan::get_text();
+                            let text = ::unity2::scan::get_text();
                             unsafe {
                                 (method_ptr as *const u8).offset_from(text.as_ptr()) as usize
                             }
