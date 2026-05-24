@@ -257,6 +257,17 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         toks[1..toks.len() - 1].iter().cloned().collect()
     }
 
+    fn macroize_crate_prefix(prefix: &TokenStream2) -> TokenStream2 {
+        let toks: Vec<proc_macro2::TokenTree> = prefix.clone().into_iter().collect();
+        if let Some(proc_macro2::TokenTree::Ident(id)) = toks.first() {
+            if *id == "crate" {
+                let rest = &toks[1..];
+                return quote! { $crate #(#rest)* };
+            }
+        }
+        prefix.clone()
+    }
+
     let parent_cascade_invocations: Vec<TokenStream2> = class_attrs
         .parents
         .iter()
@@ -272,10 +283,13 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
             } else {
                 p.macro_path_prefix()
             };
+            let p_prefix = macroize_crate_prefix(&p.path_prefix);
+            let p_base = &p.base;
+            let p_trait = format_ident!("I{}", p.base);
             if rewritten.is_empty() {
-                quote! { #prefix #base_macro!($child); }
+                quote! { #prefix #base_macro!($child, [#p_prefix #p_base], [#p_prefix #p_trait]); }
             } else {
-                quote! { #prefix #base_macro!($child, #rewritten); }
+                quote! { #prefix #base_macro!($child, [#p_prefix #p_base], [#p_prefix #p_trait], #rewritten); }
             }
         })
         .collect();
@@ -286,15 +300,15 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         .collect();
 
     let own_trait_impl = if type_param_idents.is_empty() {
-        quote! { impl #trait_ident for $child {} }
+        quote! { impl $($__str)* for $child {} }
     } else {
         let gens = gen_meta_idents.iter().map(|g| quote! { $#g });
-        quote! { impl #trait_ident<#(#gens),*> for $child {} }
+        quote! { impl $($__str)* <#(#gens),*> for $child {} }
     };
     let own_from_impl = if type_param_idents.is_empty() {
         quote! {
             #[doc(hidden)]
-            impl ::core::convert::From<$child> for #class_ident {
+            impl ::core::convert::From<$child> for $($__sty)* {
                 fn from(value: $child) -> Self {
                     <Self as ::unity2::FromIlInstance>::from_il_instance(
                         <$child as ::core::convert::Into<::unity2::IlInstance>>::into(value),
@@ -306,7 +320,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         let gens = gen_meta_idents.iter().map(|g| quote! { $#g });
         quote! {
             #[doc(hidden)]
-            impl ::core::convert::From<$child> for #class_ident<#(#gens),*> {
+            impl ::core::convert::From<$child> for $($__sty)* <#(#gens),*> {
                 fn from(value: $child) -> Self {
                     <Self as ::unity2::FromIlInstance>::from_il_instance(
                         <$child as ::core::convert::Into<::unity2::IlInstance>>::into(value),
@@ -320,7 +334,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #ancestor_macro_ident {
-            ($child:ty #(#macro_param_slots)*) => {
+            ($child:ty, [$($__sty:tt)*], [$($__str:tt)*] #(#macro_param_slots)*) => {
                 #(#parent_cascade_invocations)*
                 #own_trait_impl
                 #own_from_impl
@@ -339,28 +353,31 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
                 !p.path_prefix.is_empty() && starts_with_crate(&p.path_prefix);
             let is_cross_crate =
                 !p.path_prefix.is_empty() && !is_explicit_in_crate;
+            let p_prefix = macroize_crate_prefix(&p.path_prefix);
+            let p_base = &p.base;
+            let p_trait = format_ident!("I{}", p.base);
             if is_explicit_in_crate {
                 let parent_inherit = format_ident!("__{}_inherit", p.base);
                 let prefix = &p.path_prefix;
                 if rewritten.is_empty() {
-                    quote! { #prefix #parent_inherit!($child); }
+                    quote! { #prefix #parent_inherit!($child, [#p_prefix #p_base], [#p_prefix #p_trait]); }
                 } else {
-                    quote! { #prefix #parent_inherit!($child, #rewritten); }
+                    quote! { #prefix #parent_inherit!($child, [#p_prefix #p_base], [#p_prefix #p_trait], #rewritten); }
                 }
             } else if is_cross_crate {
                 let crate_prefix = p.macro_path_prefix();
                 let parent_export = format_ident!("__{}_ancestor_impls", p.base);
                 if rewritten.is_empty() {
-                    quote! { #crate_prefix #parent_export!($child); }
+                    quote! { #crate_prefix #parent_export!($child, [#p_prefix #p_base], [#p_prefix #p_trait]); }
                 } else {
-                    quote! { #crate_prefix #parent_export!($child, #rewritten); }
+                    quote! { #crate_prefix #parent_export!($child, [#p_prefix #p_base], [#p_prefix #p_trait], #rewritten); }
                 }
             } else {
                 let parent_export = format_ident!("__{}_ancestor_impls", p.base);
                 if rewritten.is_empty() {
-                    quote! { $crate::#parent_export!($child); }
+                    quote! { $crate::#parent_export!($child, [#p_prefix #p_base], [#p_prefix #p_trait]); }
                 } else {
-                    quote! { $crate::#parent_export!($child, #rewritten); }
+                    quote! { $crate::#parent_export!($child, [#p_prefix #p_base], [#p_prefix #p_trait], #rewritten); }
                 }
             }
         })
@@ -370,7 +387,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
     let inherit_wrapper_def = quote! {
         #[doc(hidden)]
         macro_rules! #inherit_macro_ident {
-            ($child:ty #(#macro_param_slots)*) => {
+            ($child:ty, [$($__sty:tt)*], [$($__str:tt)*] #(#macro_param_slots)*) => {
                 #(#inherit_cascade)*
                 #own_trait_impl
                 #own_from_impl
@@ -390,21 +407,24 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
                 !p.path_prefix.is_empty() && starts_with_crate(&p.path_prefix);
             let is_cross_crate =
                 !p.path_prefix.is_empty() && !is_explicit_in_crate;
+            let p_prefix = &p.path_prefix;
+            let p_base = &p.base;
+            let p_trait = format_ident!("I{}", p.base);
             if is_explicit_in_crate {
                 let inherit_macro = format_ident!("__{}_inherit", p.base);
                 let prefix = &p.path_prefix;
                 if inner.is_empty() {
-                    quote! { #prefix #inherit_macro!(#class_ident); }
+                    quote! { #prefix #inherit_macro!(#class_ident, [#p_prefix #p_base], [#p_prefix #p_trait]); }
                 } else {
-                    quote! { #prefix #inherit_macro!(#class_ident, #inner); }
+                    quote! { #prefix #inherit_macro!(#class_ident, [#p_prefix #p_base], [#p_prefix #p_trait], #inner); }
                 }
             } else if is_cross_crate {
                 let crate_prefix = p.macro_path_prefix();
                 let base_macro = format_ident!("__{}_ancestor_impls", p.base);
                 if inner.is_empty() {
-                    quote! { #crate_prefix #base_macro!(#class_ident); }
+                    quote! { #crate_prefix #base_macro!(#class_ident, [#p_prefix #p_base], [#p_prefix #p_trait]); }
                 } else {
-                    quote! { #crate_prefix #base_macro!(#class_ident, #inner); }
+                    quote! { #crate_prefix #base_macro!(#class_ident, [#p_prefix #p_base], [#p_prefix #p_trait], #inner); }
                 }
             } else {
                 let base_macro = format_ident!("__{}_ancestor_impls", p.base);
@@ -414,12 +434,12 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
                 if inner.is_empty() {
                     quote! {
                         use crate::#base_macro as #alias;
-                        #alias!(#class_ident);
+                        #alias!(#class_ident, [#p_prefix #p_base], [#p_prefix #p_trait]);
                     }
                 } else {
                     quote! {
                         use crate::#base_macro as #alias;
-                        #alias!(#class_ident, #inner);
+                        #alias!(#class_ident, [#p_prefix #p_base], [#p_prefix #p_trait], #inner);
                     }
                 }
             }
@@ -1864,35 +1884,6 @@ struct InjectedField {
     ty: TokenStream2,
 }
 
-fn split_top_level_commas(input: TokenStream2) -> Vec<TokenStream2> {
-    use proc_macro2::TokenTree;
-    let mut out: Vec<Vec<TokenTree>> = Vec::new();
-    let mut current: Vec<TokenTree> = Vec::new();
-    let mut depth: i32 = 0;
-    for tt in input.into_iter() {
-        match &tt {
-            TokenTree::Punct(p) if p.as_char() == ',' && depth == 0 => {
-                if !current.is_empty() {
-                    out.push(std::mem::take(&mut current));
-                }
-            }
-            TokenTree::Punct(p) if p.as_char() == '<' => {
-                depth += 1;
-                current.push(tt);
-            }
-            TokenTree::Punct(p) if p.as_char() == '>' => {
-                depth -= 1;
-                current.push(tt);
-            }
-            _ => current.push(tt),
-        }
-    }
-    if !current.is_empty() {
-        out.push(current);
-    }
-    out.into_iter().map(|toks| toks.into_iter().collect()).collect()
-}
-
 fn inject_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream2> {
     use proc_macro2::{Literal, Span, TokenTree};
     use quote::spanned::Spanned;
@@ -1935,12 +1926,6 @@ fn inject_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStre
     let parent_expr = parser.handle_expr_required("parent")?;
 
     parser.finish()?;
-
-    let mut with_modules: Vec<TokenStream2> = Vec::new();
-    for attr in class.attributes.iter().filter(|a| crate::util::path_is_single(&a.path, "with")) {
-        let tokens: TokenStream2 = attr.value.get_value_tokens().iter().cloned().collect();
-        with_modules.extend(split_top_level_commas(tokens));
-    }
 
     let injected_fields: Vec<InjectedField> = match &class.fields {
         venial::Fields::Unit => Vec::new(),
@@ -2017,24 +2002,22 @@ fn inject_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStre
         parent_tokens[..prefix_end].iter().cloned().collect()
     };
 
-    let raw_cascade: TokenStream2 = if crate_prefix.is_empty() {
-        quote! { #ancestor_macro_ident!(#class_ident); }
+    let parent_trait_ident = format_ident!("I{}", base_ident);
+    let (seed_ty, seed_tr): (TokenStream2, TokenStream2) = if parent_module.is_empty() {
+        (quote! { #base_ident }, quote! { #parent_trait_ident })
     } else {
-        quote! { #crate_prefix #ancestor_macro_ident!(#class_ident); }
+        (
+            quote! { #parent_module::#base_ident },
+            quote! { #parent_module::#parent_trait_ident },
+        )
     };
-
-    let with_imports = with_modules.iter().map(|m| {
-        quote! { #[allow(unused_imports)] use #m::*; }
-    });
-    let parent_module_import: TokenStream2 = if parent_module.is_empty() {
-        TokenStream2::new()
+    let raw_cascade: TokenStream2 = if crate_prefix.is_empty() {
+        quote! { #ancestor_macro_ident!(#class_ident, [#seed_ty], [#seed_tr]); }
     } else {
-        quote! { #[allow(unused_imports)] use #parent_module::*; }
+        quote! { #crate_prefix #ancestor_macro_ident!(#class_ident, [#seed_ty], [#seed_tr]); }
     };
     let inheritance_invocation: TokenStream2 = quote! {
         const _: () = {
-            #parent_module_import
-            #(#with_imports)*
             #raw_cascade
         };
     };
