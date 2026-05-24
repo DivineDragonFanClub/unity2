@@ -2187,6 +2187,21 @@ fn inject_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStre
                 static CACHE: ::std::sync::OnceLock<::unity2::Class> = ::std::sync::OnceLock::new();
                 &CACHE
             }
+
+            fn injected_fields() -> ::std::vec::Vec<::unity2::injection::InjectedFieldDescriptor> {
+                use ::unity2::injection::DefaultInjectedMembers as _;
+                Self::__injected_fields()
+            }
+
+            fn injected_methods() -> ::std::vec::Vec<::unity2::injection::InjectedMethodDescriptor> {
+                use ::unity2::injection::DefaultInjectedMembers as _;
+                Self::__injected_methods()
+            }
+
+            fn injected_overrides() -> ::std::vec::Vec<::unity2::injection::InjectedOverrideDescriptor> {
+                use ::unity2::injection::DefaultInjectedMembers as _;
+                Self::__injected_overrides()
+            }
         }
 
         #inheritance_invocation
@@ -2201,7 +2216,7 @@ fn injected_methods_inner(
 ) -> ParseResult<TokenStream2> {
     use proc_macro2::Literal;
 
-    let impl_block = match item {
+    let mut impl_block = match item {
         venial::Item::Impl(i) => i,
         _ => {
             return Err(venial::Error::new(
@@ -2227,8 +2242,9 @@ fn injected_methods_inner(
 
     let mut shims: Vec<TokenStream2> = Vec::new();
     let mut descriptors: Vec<TokenStream2> = Vec::new();
+    let mut overrides: Vec<TokenStream2> = Vec::new();
 
-    for member in &impl_block.body_items {
+    for member in &mut impl_block.body_items {
         let func = match member {
             venial::ImplMember::AssocFunction(f) => f,
             _ => {
@@ -2238,9 +2254,36 @@ fn injected_methods_inner(
             }
         };
 
-        let fn_ident = &func.name;
+        let fn_ident = func.name.clone();
+
+        let mut il2cpp_name = fn_ident.to_string();
+        let mut had_rename = false;
+        if let Some(mut parser) = crate::util::KvParser::parse_remove(&mut func.attributes, "rename")? {
+            if let Some(lit) = parser.handle_literal("name", "string")? {
+                il2cpp_name = crate::data_models::field::unquote_string_literal(&lit.to_string());
+            }
+            parser.finish()?;
+            had_rename = true;
+        }
+
+        let mut override_slot: Option<String> = None;
+        if let Some(mut parser) = crate::util::KvParser::parse_remove(&mut func.attributes, "override_virtual")? {
+            let slot = match parser.handle_literal("name", "string")? {
+                Some(lit) => crate::data_models::field::unquote_string_literal(&lit.to_string()),
+                None => fn_ident.to_string(),
+            };
+            parser.finish()?;
+            override_slot = Some(slot);
+        }
+
+        if had_rename && override_slot.is_some() {
+            return Err(venial::Error::new(
+                "a method can be #[rename] or #[override_virtual], not both",
+            ));
+        }
+
         let shim_ident = format_ident!("__inject_shim_{}_{}", self_ident, fn_ident);
-        let il2cpp_name_lit = Literal::byte_string(format!("{}\0", fn_ident).as_bytes());
+        let il2cpp_name_lit = Literal::byte_string(format!("{}\0", il2cpp_name).as_bytes());
 
         let mut typed_params: Vec<(proc_macro2::Ident, TokenStream2)> = Vec::new();
         let mut has_receiver = false;
@@ -2280,6 +2323,17 @@ fn injected_methods_inner(
             }
         });
 
+        if let Some(slot) = override_slot {
+            let slot_lit = Literal::byte_string(format!("{}\0", slot).as_bytes());
+            overrides.push(quote! {
+                ::unity2::injection::InjectedOverrideDescriptor {
+                    name: unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked(#slot_lit) },
+                    method_ptr: #shim_ident as *mut u8,
+                }
+            });
+            continue;
+        }
+
         let param_descriptors = typed_params.iter().map(|(n, t)| {
             let pname_lit = Literal::byte_string(format!("{}\0", n).as_bytes());
             quote! {
@@ -2309,6 +2363,12 @@ fn injected_methods_inner(
             pub fn __injected_methods() -> ::std::vec::Vec<::unity2::injection::InjectedMethodDescriptor> {
                 ::std::vec![
                     #(#descriptors),*
+                ]
+            }
+
+            pub fn __injected_overrides() -> ::std::vec::Vec<::unity2::injection::InjectedOverrideDescriptor> {
+                ::std::vec![
+                    #(#overrides),*
                 ]
             }
         }

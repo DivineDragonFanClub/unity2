@@ -13,10 +13,38 @@ pub trait InjectedClass: ClassIdentity + FromIlInstance {
 
     fn cache() -> &'static OnceLock<Class>;
 
+    fn injected_fields() -> Vec<InjectedFieldDescriptor> {
+        Vec::new()
+    }
+
+    fn injected_methods() -> Vec<InjectedMethodDescriptor> {
+        Vec::new()
+    }
+
+    fn injected_overrides() -> Vec<InjectedOverrideDescriptor> {
+        Vec::new()
+    }
+
     fn fill_cache(class: Class) {
         let _ = Self::cache().set(class);
     }
 }
+
+pub trait DefaultInjectedMembers {
+    fn __injected_fields() -> Vec<InjectedFieldDescriptor> {
+        Vec::new()
+    }
+
+    fn __injected_methods() -> Vec<InjectedMethodDescriptor> {
+        Vec::new()
+    }
+
+    fn __injected_overrides() -> Vec<InjectedOverrideDescriptor> {
+        Vec::new()
+    }
+}
+
+impl<T> DefaultInjectedMembers for T {}
 
 pub struct InjectedFieldDescriptor {
     pub name: &'static CStr,
@@ -38,6 +66,14 @@ pub struct InjectedMethodDescriptor {
 
 unsafe impl Send for InjectedMethodDescriptor {}
 unsafe impl Sync for InjectedMethodDescriptor {}
+
+pub struct InjectedOverrideDescriptor {
+    pub name: &'static CStr,
+    pub method_ptr: *mut u8,
+}
+
+unsafe impl Send for InjectedOverrideDescriptor {}
+unsafe impl Sync for InjectedOverrideDescriptor {}
 
 pub struct ClassBuilder<P: ClassIdentity> {
     namespace: &'static CStr,
@@ -69,6 +105,13 @@ impl<P: ClassIdentity> ClassBuilder<P> {
 
     pub fn override_virtual(mut self, name: impl Into<String>, method_ptr: *mut u8) -> Self {
         self.overrides.push((name.into(), method_ptr));
+        self
+    }
+
+    pub fn add_overrides(mut self, overrides: Vec<InjectedOverrideDescriptor>) -> Self {
+        for o in overrides {
+            self.overrides.push((o.name.to_string_lossy().into_owned(), o.method_ptr));
+        }
         self
     }
 
