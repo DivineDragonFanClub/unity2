@@ -635,6 +635,8 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         #statics_block
 
         #ancestor_macro_def
+        #[doc(hidden)]
+        pub use #ancestor_macro_ident;
         #inherit_wrapper_def
     })
 }
@@ -1981,13 +1983,13 @@ fn inject_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStre
             out.push(parent_tokens[1].clone());
             i = 2;
         }
-        if matches!(parent_tokens.get(i), Some(TokenTree::Ident(_))) {
+        if matches!(parent_tokens.get(i), Some(TokenTree::Ident(_)))
+            && is_colon(parent_tokens.get(i + 1))
+            && is_colon(parent_tokens.get(i + 2))
+        {
             out.push(parent_tokens[i].clone());
-            i += 1;
-            if is_colon(parent_tokens.get(i)) && is_colon(parent_tokens.get(i + 1)) {
-                out.push(parent_tokens[i].clone());
-                out.push(parent_tokens[i + 1].clone());
-            }
+            out.push(parent_tokens[i + 1].clone());
+            out.push(parent_tokens[i + 2].clone());
         }
         out.into_iter().collect()
     };
