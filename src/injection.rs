@@ -138,6 +138,8 @@ impl<P: ClassIdentity> ClassBuilder<P> {
             install_override(cloned, &slot_name, fn_ptr);
         }
 
+        let has_reference_field = self.added_fields.iter().any(|f| !f.ty.valuetype());
+
         if !self.added_fields.is_empty() {
             install_fields(cloned, self.added_fields);
         }
@@ -146,7 +148,20 @@ impl<P: ClassIdentity> ClassBuilder<P> {
             install_methods(cloned, self.added_methods);
         }
 
+        if has_reference_field {
+            force_conservative_gc(cloned);
+        }
+
         cloned
+    }
+}
+
+fn force_conservative_gc(class: Class) {
+    unsafe {
+        let raw = class.raw() as *const Il2CppClass as *mut Il2CppClass;
+        ::core::ptr::write_volatile(::core::ptr::addr_of_mut!((*raw)._1.gc_desc), ::core::ptr::null());
+        let flags = ::core::ptr::addr_of_mut!((*raw)._2.bitflags1);
+        ::core::ptr::write_volatile(flags, ::core::ptr::read_volatile(flags) | 0x20);
     }
 }
 

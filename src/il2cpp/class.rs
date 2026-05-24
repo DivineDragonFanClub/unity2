@@ -58,7 +58,14 @@ pub struct Il2CppClass2 {
     pub type_hierarchy_depth: u8,
     generic_recursion_depth: u8,
     pub rank: u8,
-    _2_end: [u8; 0x9],
+    minimum_alignment: u8,
+    natural_alignment: u8,
+    packing_size: u8,
+    // packed flags, bit 5 is has_references (the GC scans this type's instances
+    // for pointers). offset 0x132 from the class base, confirmed in ghidra
+    pub bitflags1: u8,
+    bitflags2: u8,
+    _2_end: [u8; 0x4],
 }
 
 #[repr(C)]
