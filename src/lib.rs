@@ -597,6 +597,17 @@ pub fn cached_field_offset_static<T: ClassIdentity>(
     })
 }
 
+#[inline]
+pub fn verify_field_offset_instance(instance: impl SystemObject, expected: usize, name: &str) {
+    let class = object_get_class(instance);
+    let field = class_get_field_from_name(class, name);
+    assert_eq!(
+        field.offset as usize, expected,
+        "baked field offset mismatch for `{name}`: const {expected:#x} but runtime says {:#x}",
+        field.offset
+    );
+}
+
 pub fn il2cpp_enum_names(enum_class: Class) -> Option<Vec<String>> {
     use std::sync::OnceLock;
 

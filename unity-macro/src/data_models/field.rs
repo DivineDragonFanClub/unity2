@@ -1,4 +1,4 @@
-use proc_macro2::Ident;
+use proc_macro2::{Ident, TokenTree};
 
 use crate::ParseResult;
 use crate::util::KvParser;
@@ -10,6 +10,7 @@ pub struct Field {
     pub il2cpp_name: String,
     // `static` is a Rust keyword so the marker is #[static_field] instead
     pub is_static: bool,
+    pub offset: Option<u64>,
 }
 
 impl Field {
@@ -53,11 +54,22 @@ impl Field {
             .iter()
             .any(|attr| crate::util::path_is_single(&attr.path, "static_field"));
 
+        let offset = field.attributes.iter().find_map(|attr| {
+            if !crate::util::path_is_single(&attr.path, "offset") {
+                return None;
+            }
+            attr.value.get_value_tokens().iter().find_map(|tt| match tt {
+                TokenTree::Literal(lit) => lit.to_string().parse::<u64>().ok(),
+                _ => None,
+            })
+        });
+
         Ok(Self {
             name: field.name.clone(),
             ty: field.ty.clone(),
             il2cpp_name,
             is_static,
+            offset,
         })
     }
 }

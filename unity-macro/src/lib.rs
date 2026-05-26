@@ -487,19 +487,37 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         let rust_name = &f.name;
         let ty = &f.ty;
         let il2cpp_name = &f.il2cpp_name;
-
         let setter_name = format_ident!("set_{}", rust_name);
-        quote! {
-            fn #rust_name(self) -> #ty {
+
+        let resolve = match f.offset {
+            Some(off) => {
+                let off_lit = proc_macro2::Literal::usize_unsuffixed(off as usize);
+                quote! {
+                    const __OFFSET: usize = #off_lit;
+                    #[cfg(debug_assertions)]
+                    {
+                        static __CHECK: ::std::sync::Once = ::std::sync::Once::new();
+                        __CHECK.call_once(|| ::unity2::verify_field_offset_instance(self, __OFFSET, #il2cpp_name));
+                    }
+                }
+            }
+            None => quote! {
                 static OFFSET: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
-                let __offset = ::unity2::cached_field_offset_instance(&OFFSET, self, #il2cpp_name);
-                ::unity2::field_get_value_at_offset(self, __offset)
+                let __OFFSET = ::unity2::cached_field_offset_instance(&OFFSET, self, #il2cpp_name);
+            },
+        };
+
+        quote! {
+            #[inline]
+            fn #rust_name(self) -> #ty {
+                #resolve
+                ::unity2::field_get_value_at_offset(self, __OFFSET)
             }
 
+            #[inline]
             fn #setter_name(self, value: #ty) {
-                static OFFSET: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
-                let __offset = ::unity2::cached_field_offset_instance(&OFFSET, self, #il2cpp_name);
-                ::unity2::field_set_value_at_offset(self, __offset, value);
+                #resolve
+                ::unity2::field_set_value_at_offset(self, __OFFSET, value);
             }
         }
     });
@@ -514,6 +532,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
 
         let setter_name = format_ident!("set_{}", rust_name);
         quote! {
+            #[inline]
             #vis fn #rust_name() -> #ty {
                 static OFFSET: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
                 let __offset = ::unity2::cached_field_offset_static::<Self>(&OFFSET, #il2cpp_name);
@@ -523,6 +542,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
                 )
             }
 
+            #[inline]
             #vis fn #setter_name(value: #ty) {
                 static OFFSET: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
                 let __offset = ::unity2::cached_field_offset_static::<Self>(&OFFSET, #il2cpp_name);
