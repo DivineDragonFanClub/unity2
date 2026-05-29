@@ -121,6 +121,13 @@ impl ClassIdentity for IntPtr {
     }
 }
 
+impl From<&'static MethodInfo> for IntPtr {
+    #[inline]
+    fn from(mi: &'static MethodInfo) -> Self {
+        IntPtr(mi as *const MethodInfo as *mut ())
+    }
+}
+
 impl IlType for IntPtr {
     fn il_type() -> &'static il2cpp::Il2CppType {
         &<Self as ClassIdentity>::class().raw()._1.byval_arg

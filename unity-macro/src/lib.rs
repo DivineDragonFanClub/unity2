@@ -1443,6 +1443,30 @@ fn methods_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStr
         quote! {}
     };
 
+    let method_info_fns: Vec<TokenStream2> = methods
+        .iter()
+        .filter(|m| matches!(m.resolution, Resolution::Name { .. } | Resolution::VtableIndex(_)))
+        .map(|m| {
+            let name = &m.name;
+            let helper_name = format_ident!("{}_method_info", name);
+            let lookup_mod_ident = format_ident!("__lookup_{}", name);
+            quote! {
+                pub fn #helper_name() -> &'static ::unity2::il2cpp::MethodInfo {
+                    #raw_module_ident::#lookup_mod_ident::get_method_info()
+                }
+            }
+        })
+        .collect();
+    let method_info_block = if method_info_fns.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            impl #self_ty {
+                #(#method_info_fns)*
+            }
+        }
+    };
+
     Ok(quote! {
         #[doc(hidden)]
         #[allow(non_snake_case, non_camel_case_types, clippy::too_many_arguments)]
@@ -1453,6 +1477,7 @@ fn methods_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStr
 
         #static_block
         #instance_block
+        #method_info_block
     })
 }
 
