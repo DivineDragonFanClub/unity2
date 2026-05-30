@@ -189,6 +189,15 @@ pub trait FromIlInstance: Sized + ClassIdentity {
     }
 }
 
+pub trait IlNull: FromIlInstance {
+    #[inline]
+    fn null() -> Self {
+        Self::from_il_instance(IlInstance::null())
+    }
+}
+
+impl<T: FromIlInstance> IlNull for T {}
+
 pub trait Cast: SystemObject {
     #[inline]
     fn get_class(self) -> Class {
