@@ -41,7 +41,7 @@ pub mod scan;
 pub mod system;
 
 pub use class::Class;
-pub use error::{Il2CppError, Il2CppResult};
+pub use error::{Il2CppError, Il2CppResult, InjectionReason};
 pub use il2cpp::{FieldInfo, MethodInfo, PropertyInfo};
 pub use method::{Method, MethodSignature};
 pub use system::{Il2CppString, SystemType};

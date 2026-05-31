@@ -1,100 +1,68 @@
-use core::fmt;
-
 pub type Il2CppResult<T> = ::core::result::Result<T, Il2CppError>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Il2CppError {
-    MissingClass {
-        namespace: String,
-        name: String,
-    },
+    #[error("class `{namespace}.{name}` not found")]
+    MissingClass { namespace: String, name: String },
+
+    #[error("could not resolve Il2CppType to an Il2CppClass")]
     MissingClassForType,
+
+    #[error("method `{class}::{method}` with {param_count} parameters not found")]
     MissingMethod {
         class: String,
         method: String,
         param_count: usize,
     },
+
+    #[error("method `{class}::{method}` has {overload_count} overloads with {param_count} parameters, disambiguate via offset or vtable_index")]
     AmbiguousMethod {
         class: String,
         method: String,
         param_count: usize,
         overload_count: usize,
     },
-    MissingField {
-        class: String,
-        field: String,
-    },
+
+    #[error("field `{field}` not found on class `{class}`")]
+    MissingField { class: String, field: String },
+
+    #[error("vtable index {index} out of range for `{class}`, vtable has {vtable_len} slots")]
     VtableIndexOutOfRange {
         class: String,
         index: usize,
         vtable_len: usize,
     },
-    FailedInstantiation {
-        class: String,
-    },
+
+    #[error("IL2CPP allocator returned null for `{class}`")]
+    FailedInstantiation { class: String },
+
+    #[error("IL2CPP array allocator returned null")]
     FailedArrayInstantiation,
-    FailedGenericInstantiation {
-        class: String,
-    },
-    FailedMethodInvocation {
-        method: String,
-    },
+
+    #[error("IL2CPP generic instantiation failed for `{class}`")]
+    FailedGenericInstantiation { class: String },
+
+    #[error("IL2CPP method `{method}` returned null")]
+    FailedMethodInvocation { method: String },
+
+    #[error("could not construct a System.Type reflection object")]
     FailedReflectionQuerying,
+
+    #[error("injection failed for `{class}::{method}`: {reason}")]
+    InjectionFailed {
+        class: String,
+        method: String,
+        #[source]
+        reason: InjectionReason,
+    },
 }
 
-impl fmt::Display for Il2CppError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingClass { namespace, name } => {
-                write!(f, "class `{}.{}` not found", namespace, name)
-            }
-            Self::MissingClassForType => {
-                f.write_str("could not resolve Il2CppType to an Il2CppClass")
-            }
-            Self::MissingMethod {
-                class,
-                method,
-                param_count,
-            } => write!(f, "method `{}::{}` with {} parameters not found", class, method, param_count),
-            Self::AmbiguousMethod {
-                class,
-                method,
-                param_count,
-                overload_count,
-            } => write!(
-                f,
-                "method `{}::{}` has {} overloads with {} parameters, disambiguate via offset or vtable_index",
-                class, method, overload_count, param_count
-            ),
-            Self::MissingField { class, field } => {
-                write!(f, "field `{}` not found on class `{}`", field, class)
-            }
-            Self::VtableIndexOutOfRange {
-                class,
-                index,
-                vtable_len,
-            } => write!(
-                f,
-                "vtable index {} out of range for `{}`, vtable has {} slots",
-                index, class, vtable_len
-            ),
-            Self::FailedInstantiation { class } => {
-                write!(f, "IL2CPP allocator returned null for `{}`", class)
-            }
-            Self::FailedArrayInstantiation => {
-                f.write_str("IL2CPP array allocator returned null")
-            }
-            Self::FailedGenericInstantiation { class } => {
-                write!(f, "IL2CPP generic instantiation failed for `{}`", class)
-            }
-            Self::FailedMethodInvocation { method } => {
-                write!(f, "IL2CPP method `{}` returned null", method)
-            }
-            Self::FailedReflectionQuerying => {
-                f.write_str("could not construct a System.Type reflection object")
-            }
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum InjectionReason {
+    // pick_invoker_donor couldn't find any parent method with a non-null invoker
+    #[error("no invoker donor in parent class for a method with {params} param(s)")]
+    NoInvokerDonor { params: u8 },
+    // override_virtual was given a slot name the parent class doesn't declare
+    #[error("parent class does not declare this virtual slot")]
+    MissingVirtualSlot,
 }
-
-impl std::error::Error for Il2CppError {}

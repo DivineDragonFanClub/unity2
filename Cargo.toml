@@ -8,6 +8,7 @@ repository = "https://github.com/DivineDragonFanClub/unity2"
 [dependencies]
 skyline = "0.6"
 lazysimd = "0.1"
+thiserror = "1"
 unity-macro = { path = "./unity-macro" }
 
 [features]

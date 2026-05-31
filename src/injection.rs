@@ -1,6 +1,7 @@
 use std::ffi::CStr;
 use std::sync::OnceLock;
 
+use crate::error::{Il2CppError, Il2CppResult, InjectionReason};
 use crate::il2cpp::method::ParameterInfo;
 use crate::il2cpp::{FieldInfo, Il2CppClass, Il2CppType, MethodInfo};
 use crate::{Class, ClassIdentity, FromIlInstance};
@@ -126,6 +127,10 @@ impl<P: ClassIdentity> ClassBuilder<P> {
     }
 
     pub fn build(self) -> Class {
+        self.try_build().unwrap_or_else(|e| panic!("{}", e))
+    }
+
+    pub fn try_build(self) -> Il2CppResult<Class> {
         let parent = P::class();
         let cloned = parent.clone_for_override();
 
@@ -135,7 +140,7 @@ impl<P: ClassIdentity> ClassBuilder<P> {
         install_type_hierarchy(cloned, parent);
 
         for (slot_name, fn_ptr) in self.overrides {
-            install_override(cloned, &slot_name, fn_ptr);
+            install_override(cloned, &slot_name, fn_ptr)?;
         }
 
         let has_reference_field = self.added_fields.iter().any(|f| !f.ty.valuetype());
@@ -145,14 +150,14 @@ impl<P: ClassIdentity> ClassBuilder<P> {
         }
 
         if !self.added_methods.is_empty() {
-            install_methods(cloned, self.added_methods);
+            install_methods(cloned, self.added_methods)?;
         }
 
         if has_reference_field {
             force_conservative_gc(cloned);
         }
 
-        cloned
+        Ok(cloned)
     }
 }
 
@@ -229,16 +234,15 @@ fn install_fields(class: Class, descriptors: Vec<InjectedFieldDescriptor>) {
     }
 }
 
-fn install_override(class: Class, slot_name: &str, method_ptr: *mut u8) {
+fn install_override(class: Class, slot_name: &str, method_ptr: *mut u8) -> Il2CppResult<()> {
     let donor: &MethodInfo = {
-        let vi = class.raw().get_virtual_method(slot_name).unwrap_or_else(|| {
-            panic!(
-                "ClassBuilder: virtual method `{}` not found on {}.{}",
-                slot_name,
-                class.namespace(),
-                class.name()
-            )
-        });
+        let vi = class.raw().get_virtual_method(slot_name).ok_or_else(|| {
+            Il2CppError::InjectionFailed {
+                class: format!("{}.{}", class.namespace(), class.name()),
+                method: slot_name.to_string(),
+                reason: InjectionReason::MissingVirtualSlot,
+            }
+        })?;
         vi.method_info
     };
 
@@ -247,9 +251,13 @@ fn install_override(class: Class, slot_name: &str, method_ptr: *mut u8) {
     let leaked: &'static MethodInfo = Box::leak(Box::new(new_mi));
 
     class.override_virtual_method(slot_name, leaked);
+    Ok(())
 }
 
-fn install_methods(class: Class, descriptors: Vec<InjectedMethodDescriptor>) {
+fn install_methods(
+    class: Class,
+    descriptors: Vec<InjectedMethodDescriptor>,
+) -> Il2CppResult<()> {
     let parent_methods: &[&'static MethodInfo] = class.raw().get_methods();
     let mut all_methods: Vec<&'static MethodInfo> = parent_methods.to_vec();
 
@@ -257,19 +265,18 @@ fn install_methods(class: Class, descriptors: Vec<InjectedMethodDescriptor>) {
         parent_methods: &[&'static MethodInfo],
         params_count: u8,
         return_is_void: bool,
-    ) -> *const u8 {
+    ) -> Option<*const u8> {
         if let Some(m) = parent_methods.iter().find(|m| {
             m.parameters_count == params_count
                 && method_is_void_return(m) == return_is_void
                 && !m.invoker_method.is_null()
         }) {
-            return m.invoker_method;
+            return Some(m.invoker_method);
         }
         parent_methods
             .iter()
             .find(|m| !m.invoker_method.is_null())
             .map(|m| m.invoker_method)
-            .unwrap_or(::core::ptr::null())
     }
 
     fn method_is_void_return(m: &MethodInfo) -> bool {
@@ -304,8 +311,12 @@ fn install_methods(class: Class, descriptors: Vec<InjectedMethodDescriptor>) {
         };
 
         let return_is_void = desc.return_type.type_enum() == crate::il2cpp::TYPE_VOID;
-        let invoker_donor =
-            pick_invoker_donor(parent_methods, parameters_count, return_is_void);
+        let invoker_donor = pick_invoker_donor(parent_methods, parameters_count, return_is_void)
+            .ok_or_else(|| Il2CppError::InjectionFailed {
+                class: format!("{}.{}", class.namespace(), class.name()),
+                method: desc.name.to_string_lossy().into_owned(),
+                reason: InjectionReason::NoInvokerDonor { params: parameters_count },
+            })?;
 
         let mut mi = MethodInfo::new();
         mi.method_ptr = desc.method_ptr;
@@ -334,4 +345,5 @@ fn install_methods(class: Class, descriptors: Vec<InjectedMethodDescriptor>) {
             leaked_array.len() as u16,
         );
     }
+    Ok(())
 }
