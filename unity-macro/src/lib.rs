@@ -1739,6 +1739,8 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
     };
     let sized_bound = if m.is_static {
         quote! {}
+    } else if m.is_abstract {
+        quote! { where Self: ::core::marker::Sized + ::core::convert::Into<::unity2::IlInstance> }
     } else {
         quote! { where Self: ::core::marker::Sized }
     };
@@ -1779,8 +1781,20 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
         },
     };
 
-    quote! {
-        #unsafe_kw fn #name(#receiver #(#typed_params),*) #ret_clause #sized_bound {
+    let resolve_block = if m.is_abstract && !m.is_static {
+        quote! {
+            let __vi = ::unity2::Cast::get_class(self)
+                .raw()
+                .get_virtual_method(#il2cpp_name_lit)
+                .unwrap_or_else(|| panic!(
+                    "unity2::methods: abstract `{}` not found on the runtime vtable",
+                    #il2cpp_name_lit,
+                ));
+            let __ptr = __vi.method_ptr as usize;
+            let __info: &'static ::unity2::MethodInfo = __vi.method_info;
+        }
+    } else {
+        quote! {
             static CACHE: ::std::sync::OnceLock<
                 ::std::sync::Mutex<
                     ::std::collections::HashMap<
@@ -1803,6 +1817,12 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
                     (__mi.method_ptr as usize, &*__mi)
                 })
             };
+        }
+    };
+
+    quote! {
+        #unsafe_kw fn #name(#receiver #(#typed_params),*) #ret_clause #sized_bound {
+            #resolve_block
             let __f: #extern_fn_ty = unsafe { ::std::mem::transmute(__ptr) };
             #(#slot_inits)*
             #final_expr

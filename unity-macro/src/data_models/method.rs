@@ -23,6 +23,7 @@ pub struct Method {
     pub return_ty: Option<TypeExpr>,
     pub resolution: Resolution,
     pub is_unsafe: bool,
+    pub is_abstract: bool,
 }
 
 impl Method {
@@ -74,6 +75,11 @@ impl Method {
         let is_unsafe = parser
             .as_mut()
             .map(|p| p.handle_alone("unsafe"))
+            .transpose()?
+            .unwrap_or(false);
+        let is_abstract = parser
+            .as_mut()
+            .map(|p| p.handle_alone("abstract_dispatch"))
             .transpose()?
             .unwrap_or(false);
         if let Some(p) = parser {
@@ -144,6 +150,7 @@ impl Method {
             return_ty: func.return_ty.clone(),
             resolution,
             is_unsafe,
+            is_abstract,
         })
     }
 }
