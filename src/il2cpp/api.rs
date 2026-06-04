@@ -16,6 +16,7 @@ use super::{
 use crate::system::SystemType;
 
 extern "C" {
+    #[allow(dead_code)]
     #[link_name = "il2cpp_init"]
     pub(crate) fn init(domain_name: *const i8) -> i32;
 
