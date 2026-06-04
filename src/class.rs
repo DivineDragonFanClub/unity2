@@ -192,6 +192,10 @@ impl Class {
         self.raw_mut().override_virtual_method(name, method_info)
     }
 
+    pub fn init(self) {
+        unsafe { api::class_init(self.raw()) }
+    }
+
     pub fn array_class(self) -> Class {
         let arr: Array<u8> = unsafe { api::array_new::<u8>(self.raw(), 0) };
         // Il2CppArraySize header's first field is *const Il2CppClass regardless of T

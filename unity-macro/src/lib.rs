@@ -1814,6 +1814,9 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
                     let __mi = __class.raw()
                         .get_method_from_name(#il2cpp_name_lit, #il2cpp_arg_count)
                         .expect(#missing_msg);
+                    if let ::core::option::Option::Some(__decl) = __mi.class {
+                        ::unity2::Class::from_raw(__decl).init();
+                    }
                     (__mi.method_ptr as usize, &*__mi)
                 })
             };
