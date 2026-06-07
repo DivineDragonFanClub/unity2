@@ -179,6 +179,10 @@ impl Class {
                 size,
             );
 
+            // the memcpy left byval_arg/this_arg pointing at the template, fix
+            // them so type checks resolve to this clone and not the template
+            crate::il2cpp::class::Il2CppClass1::repoint_type_args_to_self(dest as *mut Il2CppClass, src as *const Il2CppClass);
+
             Class::from_raw(&*(dest as *const Il2CppClass))
         }
     }

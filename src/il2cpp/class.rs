@@ -89,6 +89,19 @@ impl Il2CppClass1 {
         ::core::ptr::write_volatile(::core::ptr::addr_of_mut!((*class1).name), name);
         ::core::ptr::write_volatile(::core::ptr::addr_of_mut!((*class1).namespace), namespace);
     }
+
+    pub unsafe fn repoint_type_args_to_self(class: *mut Il2CppClass, template: *const Il2CppClass) {
+        let self_ptr = class as *const u8;
+        let template_ptr = template as *const u8;
+        let byval = ::core::ptr::addr_of_mut!((*class)._1.byval_arg.data.data);
+        let this = ::core::ptr::addr_of_mut!((*class)._1.this_arg.data.data);
+        if *byval == template_ptr {
+            *byval = self_ptr;
+        }
+        if *this == template_ptr {
+            *this = self_ptr;
+        }
+    }
 }
 
 #[repr(C)]
