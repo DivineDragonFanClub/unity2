@@ -11,6 +11,15 @@ macro_rules! method_info {
     };
 }
 
+#[macro_export]
+macro_rules! il2cpp_call {
+    ($fp:expr, $ret:ty; $( ($ty:ty) $arg:expr ),* $(,)?) => {{
+        let __f: extern "C" fn($($ty,)* $crate::OptionalMethod) -> $ret =
+            ::core::mem::transmute($fp);
+        __f($($arg,)* ::core::option::Option::None)
+    }};
+}
+
 pub fn method_info_for_fn(method_ptr: *mut u8, parameters_count: u8) -> &'static MethodInfo {
     use std::collections::HashMap;
     use std::sync::Mutex;
