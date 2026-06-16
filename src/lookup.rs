@@ -169,8 +169,26 @@ pub fn method_info_on_class_with_signature(
     }
 }
 
+pub fn method_info_disambiguated(
+    class: Class,
+    method_name: &str,
+    param_count: usize,
+    param_types: &[&'static Il2CppType],
+    is_static: bool,
+) -> Option<&'static MethodInfo> {
+    if let Ok(mi) = method_info_on_class_with_signature(class, method_name, param_count, param_types, is_static) {
+        return Some(mi);
+    }
+    class.raw().get_method_from_name(method_name, param_count).map(|m| &*m)
+}
+
 fn il2cpp_type_eq(a: &Il2CppType, b: &Il2CppType) -> bool {
     if std::ptr::eq(a as *const _, b as *const _) {
+        return true;
+    }
+    if matches!(a.type_enum(), crate::il2cpp::TYPE_VAR | crate::il2cpp::TYPE_MVAR)
+        || matches!(b.type_enum(), crate::il2cpp::TYPE_VAR | crate::il2cpp::TYPE_MVAR)
+    {
         return true;
     }
     if (a.type_enum() == crate::il2cpp::TYPE_OBJECT && is_reference_type_enum(b.type_enum()))

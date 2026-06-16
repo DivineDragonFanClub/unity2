@@ -1244,7 +1244,7 @@ fn methods_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStr
         let methods_trait_ident = format_ident!("I{}Methods", self_ident);
         let field_trait_ident = format_ident!("I{}", self_ident);
 
-        let method_defaults = methods.iter().map(|m| build_generic_trait_default(m));
+        let method_defaults = methods.iter().map(|m| build_generic_trait_default(m, &type_param_idents));
 
         let blanket_bounds = if is_value_type {
             quote! {
@@ -1648,7 +1648,7 @@ fn reference_to_raw_pointer(ty: &venial::TypeExpr) -> (proc_macro2::TokenStream,
     (quote! { #ptr_kind #inner }, true)
 }
 
-fn build_generic_trait_default(m: &Method) -> TokenStream2 {
+fn build_generic_trait_default(m: &Method, type_params: &[&proc_macro2::Ident]) -> TokenStream2 {
     let name = &m.name;
 
     let il2cpp_name = match &m.resolution {
@@ -1657,13 +1657,24 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
     };
     let il2cpp_name_lit = il2cpp_name.as_str();
 
+    let il_type_expr = |ty: &venial::TypeExpr| -> TokenStream2 {
+        let ty_str = quote! { #ty }.to_string().replace(char::is_whitespace, "");
+        if type_params.iter().any(|p| p.to_string() == ty_str) {
+            quote! { &<#ty as ::unity2::ClassIdentity>::class().raw()._1.byval_arg }
+        } else {
+            quote! { <#ty as ::unity2::IlType>::il_type() }
+        }
+    };
+
     let mut typed_params: Vec<TokenStream2> = Vec::new();
     let mut call_exprs: Vec<TokenStream2> = Vec::new();
     let mut abi_types: Vec<TokenStream2> = Vec::new();
     let mut slot_inits: Vec<TokenStream2> = Vec::new();
     let mut slot_reads: Vec<TokenStream2> = Vec::new();
     let mut out_inner_tys: Vec<TokenStream2> = Vec::new();
+    let mut sig_type_exprs: Vec<TokenStream2> = Vec::new();
     for p in m.params.iter() {
+        sig_type_exprs.push(il_type_expr(&p.ty));
         if let Some(inner) = type_is_mut_pointer(&p.ty) {
             let slot = proc_macro2::Ident::new(
                 &format!("__out_{}", out_inner_tys.len()),
@@ -1757,6 +1768,7 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
     );
 
     let il2cpp_arg_count = m.params.len();
+    let is_static_lit = m.is_static;
 
     let final_expr = match (&m.return_ty, out_inner_tys.len()) {
         (None, 0) | (Some(_), 0) => quote! { __f(#call_args) },
@@ -1811,13 +1823,21 @@ fn build_generic_trait_default(m: &Method) -> TokenStream2 {
             let (__ptr, __info) = {
                 let mut __guard = __map.lock().unwrap();
                 *__guard.entry(__key).or_insert_with(|| {
-                    let __mi = __class.raw()
-                        .get_method_from_name(#il2cpp_name_lit, #il2cpp_arg_count)
-                        .expect(#missing_msg);
+                    let __param_types: &[&'static ::unity2::il2cpp::Il2CppType] = &[
+                        #(#sig_type_exprs),*
+                    ];
+                    let __mi = ::unity2::lookup::method_info_disambiguated(
+                        __class,
+                        #il2cpp_name_lit,
+                        #il2cpp_arg_count,
+                        __param_types,
+                        #is_static_lit,
+                    )
+                    .expect(#missing_msg);
                     if let ::core::option::Option::Some(__decl) = __mi.class {
                         ::unity2::Class::from_raw(__decl).init();
                     }
-                    (__mi.method_ptr as usize, &*__mi)
+                    (__mi.method_ptr as usize, __mi)
                 })
             };
         }
