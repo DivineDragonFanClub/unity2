@@ -169,11 +169,13 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
                     >,
                 > = ::std::sync::OnceLock::new();
                 use ::std::hash::{Hash as _, Hasher as _};
+                let __args = [
+                    #(<#type_args as ::unity2::ClassIdentity>::class()),*
+                ];
                 let mut __h = ::std::collections::hash_map::DefaultHasher::new();
-                #(
-                    (<#type_args as ::unity2::ClassIdentity>::class().raw()
-                        as *const _ as usize).hash(&mut __h);
-                )*
+                for __a in __args.iter() {
+                    (__a.raw() as *const _ as usize).hash(&mut __h);
+                }
                 let __key = __h.finish();
                 let __map = CACHE.get_or_init(|| {
                     ::std::sync::Mutex::new(::std::collections::HashMap::new())
@@ -184,9 +186,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
                         <Self as ::unity2::ClassIdentity>::NAMESPACE,
                         <Self as ::unity2::ClassIdentity>::NAME,
                     )
-                    .make_generic(&[
-                        #(<#type_args as ::unity2::ClassIdentity>::class()),*
-                    ])
+                    .make_generic(&__args)
                     .unwrap_or_else(|| panic!(
                         "{}",
                         ::unity2::Il2CppError::FailedGenericInstantiation {
