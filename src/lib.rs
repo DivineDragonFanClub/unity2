@@ -377,6 +377,11 @@ impl<T: Copy> Array<T> {
         Self(IlInstance::from_raw(ptr), ::core::marker::PhantomData)
     }
 
+    #[inline]
+    pub fn null() -> Self {
+        Self(IlInstance::null(), ::core::marker::PhantomData)
+    }
+
     pub fn new(class: &Il2CppClass, length: usize) -> Option<Array<T>> {
         let arr = unsafe { crate::il2cpp::api::array_new::<T>(class, length) };
         if arr.is_null() {
