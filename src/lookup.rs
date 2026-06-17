@@ -65,6 +65,22 @@ pub fn method_info_on_class(
     param_count: usize,
 ) -> Il2CppResult<&'static MethodInfo> {
     let raw = class.raw();
+    let mut generic_hit: Option<&'static MethodInfo> = None;
+    for_each_in_parent_chain(class, |c| {
+        for m in c.get_methods() {
+            if m.parameters_count as usize == param_count
+                && m.is_generic_definition()
+                && m.get_name().as_deref() == Some(method_name)
+            {
+                generic_hit = Some(*m);
+                return false;
+            }
+        }
+        true
+    });
+    if let Some(mi) = generic_hit {
+        return Ok(mi);
+    }
     raw.get_method_from_name(method_name, param_count)
         .map(|mi| &*mi)
         .ok_or_else(|| Il2CppError::MissingMethod {

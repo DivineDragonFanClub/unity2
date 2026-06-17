@@ -49,6 +49,11 @@ impl MethodInfo {
         unsafe { ::core::mem::zeroed() }
     }
 
+    #[inline]
+    pub fn is_generic_definition(&self) -> bool {
+        self.bitflags & 1 != 0
+    }
+
     pub fn get_name(&self) -> Option<String> {
         if self.name.is_null() {
             None
