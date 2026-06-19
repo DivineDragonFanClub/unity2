@@ -1051,20 +1051,32 @@ fn parse_hook_args(attr: TokenStream2, attr_name: &str) -> ParseResult<IlHookArg
 }
 
 fn infer_il_arg_count(func: &venial::Function) -> usize {
-    let mut count = 0;
-    for (param, _) in func.params.inner.iter() {
-        match param {
-            venial::FnParam::Receiver(_) => {}
-            venial::FnParam::Typed(t) => {
-                let name = t.name.to_string();
-                if name == "this" || name == "method_info" || name.starts_with('_') {
-                    continue;
-                }
-                count += 1;
-            }
-        }
+    let typed: Vec<&venial::FnTypedParam> = func
+        .params
+        .inner
+        .iter()
+        .filter_map(|(p, _)| match p {
+            venial::FnParam::Typed(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+
+    let has_name = |t: &venial::FnTypedParam, a: &str, b: &str| {
+        let n = t.name.to_string();
+        n == a || n == b
+    };
+
+    let mut start = 0;
+    let mut end = typed.len();
+
+    if start < end && has_name(typed[start], "this", "_this") {
+        start += 1;
     }
-    count
+    if end > start && has_name(typed[end - 1], "method_info", "_method_info") {
+        end -= 1;
+    }
+
+    end - start
 }
 
 fn hook_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream2> {
@@ -2461,4 +2473,46 @@ fn injected_methods_inner(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod infer_il_arg_count_tests {
+    use super::infer_il_arg_count;
+
+    fn count(src: &str) -> usize {
+        let item = venial::parse_item(src.parse().unwrap()).unwrap();
+        match item {
+            venial::Item::Function(f) => infer_il_arg_count(&f),
+            _ => panic!("expected a function"),
+        }
+    }
+
+    #[test]
+    fn drops_this_and_method_info_only() {
+        assert_eq!(
+            count(r#"extern "C" fn h(this: u64, a: i32, b: i32, method_info: u64) {}"#),
+            2
+        );
+        assert_eq!(
+            count(r#"extern "C" fn h(_this: u64, a: i32, _method_info: u64) {}"#),
+            1
+        );
+    }
+
+    #[test]
+    fn keeps_unused_underscore_arguments() {
+        assert_eq!(
+            count(r#"extern "C" fn h(this: u64, _unused: i32, b: i32, method_info: u64) {}"#),
+            2
+        );
+        assert_eq!(
+            count(r#"extern "C" fn h(this: u64, _a: i32, _b: i32, _method_info: u64) {}"#),
+            2
+        );
+    }
+
+    #[test]
+    fn static_method_has_no_this() {
+        assert_eq!(count(r#"extern "C" fn h(a: i32, method_info: u64) {}"#), 1);
+    }
 }
