@@ -483,6 +483,24 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
         (quote! { #direct_prefix #direct_trait_ident #direct_generics }, impls)
     };
 
+    let base_block = if let Some(direct) = class_attrs.parents.first() {
+        let direct_base = &direct.base;
+        let direct_generics = &direct.generics;
+        let direct_prefix = &direct.path_prefix;
+        quote! {
+            impl #impl_generics #class_ident #type_generics {
+                #[inline]
+                pub fn base(self) -> #direct_prefix #direct_base #direct_generics {
+                    <#direct_prefix #direct_base #direct_generics as ::unity2::FromIlInstance>::from_il_instance(
+                        <#class_ident #type_generics as ::core::convert::Into<::unity2::IlInstance>>::into(self),
+                    )
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let instance_accessors = fields.iter().filter(|f| !f.is_static).map(|f| {
         let rust_name = &f.name;
         let ty = &f.ty;
@@ -651,6 +669,7 @@ fn class_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStrea
 
         impl #impl_generics #trait_ident #type_generics for #class_ident #type_generics {}
         #parent_impls
+        #base_block
 
         #statics_block
 
