@@ -2262,13 +2262,17 @@ fn inject_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStre
             const NAME: &'static str = #name;
 
             fn class() -> ::unity2::Class {
-                *<Self as ::unity2::injection::InjectedClass>::cache()
-                    .get()
-                    .expect(concat!(
-                        "<",
-                        stringify!(#class_ident),
-                        " as ClassIdentity>::class() called before injection registration",
-                    ))
+                *<Self as ::unity2::injection::InjectedClass>::cache().get_or_init(|| {
+                    ::unity2::Class::try_lookup(Self::NAMESPACE, Self::NAME).unwrap_or_else(|_| {
+                        panic!(concat!(
+                            "injected class ",
+                            stringify!(#class_ident),
+                            " not found, register it once with register::<",
+                            stringify!(#class_ident),
+                            ">() before use",
+                        ))
+                    })
+                })
             }
         }
 
@@ -2289,18 +2293,14 @@ fn inject_inner(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStre
             type Parent = #parent_expr;
             const EXTRA_BYTES: u32 = #extra_bytes_const;
 
-            fn class_builder() -> ::unity2::injection::ClassBuilder<Self::Parent> {
-                const NAME_CSTR: &'static ::core::ffi::CStr = match ::core::ffi::CStr::from_bytes_with_nul(#name_cstr) {
-                    ::core::result::Result::Ok(s) => s,
-                    ::core::result::Result::Err(_) => panic!("invalid CStr literal in #[unity2::inject]"),
-                };
-                const NAMESPACE_CSTR: &'static ::core::ffi::CStr = match ::core::ffi::CStr::from_bytes_with_nul(#namespace_cstr) {
-                    ::core::result::Result::Ok(s) => s,
-                    ::core::result::Result::Err(_) => panic!("invalid CStr literal in #[unity2::inject]"),
-                };
-                ::unity2::injection::ClassBuilder::<Self::Parent>::new(NAMESPACE_CSTR, NAME_CSTR)
-                    .extra_bytes(<Self as ::unity2::injection::InjectedClass>::EXTRA_BYTES)
-            }
+            const NAME_CSTR: &'static ::core::ffi::CStr = match ::core::ffi::CStr::from_bytes_with_nul(#name_cstr) {
+                ::core::result::Result::Ok(s) => s,
+                ::core::result::Result::Err(_) => panic!("invalid CStr literal in #[unity2::inject]"),
+            };
+            const NAMESPACE_CSTR: &'static ::core::ffi::CStr = match ::core::ffi::CStr::from_bytes_with_nul(#namespace_cstr) {
+                ::core::result::Result::Ok(s) => s,
+                ::core::result::Result::Err(_) => panic!("invalid CStr literal in #[unity2::inject]"),
+            };
 
             fn cache() -> &'static ::std::sync::OnceLock<::unity2::Class> {
                 static CACHE: ::std::sync::OnceLock<::unity2::Class> = ::std::sync::OnceLock::new();

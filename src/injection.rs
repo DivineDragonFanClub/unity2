@@ -10,7 +10,8 @@ pub trait InjectedClass: ClassIdentity + FromIlInstance {
     type Parent: ClassIdentity;
     const EXTRA_BYTES: u32 = 0;
 
-    fn class_builder() -> ClassBuilder<Self::Parent>;
+    const NAME_CSTR: &'static CStr;
+    const NAMESPACE_CSTR: &'static CStr;
 
     fn cache() -> &'static OnceLock<Class>;
 
@@ -75,91 +76,6 @@ pub struct InjectedOverrideDescriptor {
 
 unsafe impl Send for InjectedOverrideDescriptor {}
 unsafe impl Sync for InjectedOverrideDescriptor {}
-
-pub struct ClassBuilder<P: ClassIdentity> {
-    namespace: &'static CStr,
-    name: &'static CStr,
-    extra_bytes: u32,
-    overrides: Vec<(String, *mut u8)>,
-    added_methods: Vec<InjectedMethodDescriptor>,
-    added_fields: Vec<InjectedFieldDescriptor>,
-    _parent: ::core::marker::PhantomData<P>,
-}
-
-impl<P: ClassIdentity> ClassBuilder<P> {
-    pub fn new(namespace: &'static CStr, name: &'static CStr) -> Self {
-        Self {
-            namespace,
-            name,
-            extra_bytes: 0,
-            overrides: Vec::new(),
-            added_methods: Vec::new(),
-            added_fields: Vec::new(),
-            _parent: ::core::marker::PhantomData,
-        }
-    }
-
-    pub fn extra_bytes(mut self, bytes: u32) -> Self {
-        self.extra_bytes = bytes;
-        self
-    }
-
-    pub fn override_virtual(mut self, name: impl Into<String>, method_ptr: *mut u8) -> Self {
-        self.overrides.push((name.into(), method_ptr));
-        self
-    }
-
-    pub fn add_overrides(mut self, overrides: Vec<InjectedOverrideDescriptor>) -> Self {
-        for o in overrides {
-            self.overrides.push((o.name.to_string_lossy().into_owned(), o.method_ptr));
-        }
-        self
-    }
-
-    pub fn add_methods(mut self, methods: Vec<InjectedMethodDescriptor>) -> Self {
-        self.added_methods.extend(methods);
-        self
-    }
-
-    pub fn add_fields(mut self, fields: Vec<InjectedFieldDescriptor>) -> Self {
-        self.added_fields.extend(fields);
-        self
-    }
-
-    pub fn build(self) -> Class {
-        self.try_build().unwrap_or_else(|e| panic!("{}", e))
-    }
-
-    pub fn try_build(self) -> Il2CppResult<Class> {
-        let parent = P::class();
-        let cloned = parent.clone_for_override();
-
-        cloned.set_name(self.name, self.namespace);
-        cloned.set_instance_size(parent.instance_size() + self.extra_bytes);
-
-        install_type_hierarchy(cloned, parent);
-
-        for (slot_name, fn_ptr) in self.overrides {
-            install_override(cloned, &slot_name, fn_ptr)?;
-        }
-
-        let has_reference_field = self.added_fields.iter().any(|f| !f.ty.valuetype());
-
-        if !self.added_fields.is_empty() {
-            install_fields(cloned, self.added_fields);
-        }
-
-        if !self.added_methods.is_empty() {
-            install_methods(cloned, self.added_methods)?;
-        }
-
-        if has_reference_field {
-            force_conservative_gc(cloned);
-        }
-
-        Ok(cloned)
-    }
-}
 
 fn force_conservative_gc(class: Class) {
     unsafe {
@@ -346,4 +262,67 @@ fn install_methods(
         );
     }
     Ok(())
+}
+
+pub fn build<T: InjectedClass>() -> Class {
+    let parent = <T::Parent as ClassIdentity>::class();
+    let class = parent.clone_for_override();
+
+    class.set_name(T::NAME_CSTR, T::NAMESPACE_CSTR);
+    class.set_instance_size(parent.instance_size() + T::EXTRA_BYTES);
+    install_type_hierarchy(class, parent);
+
+    for o in T::injected_overrides() {
+        let slot = o.name.to_string_lossy();
+        install_override(class, &slot, o.method_ptr).unwrap_or_else(|e| panic!("{}", e));
+    }
+
+    let fields = T::injected_fields();
+    let has_reference_field = fields.iter().any(|f| !f.ty.valuetype());
+    if !fields.is_empty() {
+        install_fields(class, fields);
+    }
+
+    let methods = T::injected_methods();
+    if !methods.is_empty() {
+        install_methods(class, methods).unwrap_or_else(|e| panic!("{}", e));
+    }
+
+    if has_reference_field {
+        force_conservative_gc(class);
+    }
+
+    class
+}
+
+pub fn instantiate<T: InjectedClass>() -> Option<T> {
+    let class = T::class();
+    let inst: crate::IlInstance = unsafe { crate::il2cpp::api::object_new(class.raw()) };
+    if inst.is_null() {
+        return None;
+    }
+    Some(T::from_il_instance(inst))
+}
+
+pub fn instantiate_with_ctor<T: InjectedClass>() -> Option<T> {
+    let class = T::class();
+    let inst: crate::IlInstance = unsafe { crate::il2cpp::api::object_new(class.raw()) };
+    if inst.is_null() {
+        return None;
+    }
+
+    if let Some(ctor) = T::Parent::class().raw().get_method_from_name(".ctor", 0) {
+        invoke_ctor(inst, &*ctor);
+    }
+
+    Some(T::from_il_instance(inst))
+}
+
+fn invoke_ctor(inst: crate::IlInstance, ctor: &'static MethodInfo) {
+    if ctor.method_ptr.is_null() {
+        return;
+    }
+    type CtorFn = unsafe extern "C" fn(*mut (), *const MethodInfo);
+    let f: CtorFn = unsafe { ::core::mem::transmute(ctor.method_ptr) };
+    unsafe { f(inst.as_ptr(), ctor as *const _) };
 }
