@@ -14,3 +14,4 @@ Cargo.lock
 # MacOS droppings
 .DS_Store
 unity-macro/target
+unity-nx-macro/target
