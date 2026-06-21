@@ -8,13 +8,16 @@ use crate::{Array, ClassIdentity};
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct Class {
-    inner: &'static Il2CppClass,
+    inner: *mut Il2CppClass,
 }
+
+unsafe impl Send for Class {}
+unsafe impl Sync for Class {}
 
 impl Class {
     #[inline]
     pub fn from_raw(inner: &'static Il2CppClass) -> Self {
-        Self { inner }
+        Self { inner: inner as *const Il2CppClass as *mut Il2CppClass }
     }
 
     // Dotted names like `MapUnitCommandMenu.DanceMenuItem` split on the last `.` and walk nested_types
@@ -53,15 +56,12 @@ impl Class {
 
     #[inline]
     pub fn raw(self) -> &'static Il2CppClass {
-        self.inner
+        unsafe { &*self.inner }
     }
 
     #[inline]
     pub fn raw_mut(self) -> &'static mut Il2CppClass {
-        #[allow(invalid_reference_casting)]
-        unsafe {
-            &mut *((self.inner as *const Il2CppClass) as *mut Il2CppClass)
-        }
+        unsafe { &mut *self.inner }
     }
 
     pub fn name(self) -> String {
