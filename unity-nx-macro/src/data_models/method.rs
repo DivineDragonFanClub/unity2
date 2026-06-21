@@ -31,7 +31,7 @@ impl Method {
         if func.body.is_some() {
             return bail!(
                 &func.name,
-                "method declarations inside #[unity2::methods] must have no body"
+                "method declarations inside #[unity::methods] must have no body"
             );
         }
 

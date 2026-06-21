@@ -130,7 +130,7 @@ pub fn parse_parent_attr(attributes: &[venial::Attribute]) -> ParseResult<Vec<Pa
                     return bail!(
                         tt,
                         "#[parent(...)] entry must be a path like `Foo`, \
-                         `unity2::Foo`, or `::unity2::Foo<T>`",
+                         `unity::Foo`, or `::unity::Foo<T>`",
                     );
                 }
             }

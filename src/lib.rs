@@ -1,8 +1,8 @@
-extern crate self as unity2;
+extern crate self as unity;
 
 use crate::il2cpp::Il2CppClass;
 
-pub use unity_macro::*;
+pub use unity_nx_macro::*;
 
 #[macro_export]
 macro_rules! method_info {

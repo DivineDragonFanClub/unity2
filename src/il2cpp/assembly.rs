@@ -25,7 +25,7 @@ pub struct Il2CppAssembly {
     referenced_assembly_count: i32,
 }
 
-// std::vector layout, read-only from unity2
+// std::vector layout, read-only from unity
 #[repr(C)]
 pub(crate) struct CppVector<T> {
     start: *const T,

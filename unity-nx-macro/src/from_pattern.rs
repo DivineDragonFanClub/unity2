@@ -11,7 +11,7 @@ pub fn expand(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream
         venial::Item::Function(f) => f,
         _ => {
             return Err(venial::Error::new(
-                "#[unity_macro::from_pattern] can only be applied to fn declarations",
+                "#[unity_nx_macro::from_pattern] can only be applied to fn declarations",
             ));
         }
     };
@@ -36,7 +36,7 @@ pub fn expand(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream
             venial::FnParam::Typed(t) => typed_params.push(t),
             _ => {
                 return Err(venial::Error::new(
-                    "#[unity_macro::from_pattern] does not support self receivers",
+                    "#[unity_nx_macro::from_pattern] does not support self receivers",
                 ));
             }
         }
@@ -58,7 +58,7 @@ pub fn expand(attr: TokenStream2, item: venial::Item) -> ParseResult<TokenStream
     Ok(quote! {
         #vis unsafe fn #name #generics (#(#param_decls),*) #ret_arrow #where_clause {
             static OFFSETS: ::std::sync::LazyLock<usize> = ::std::sync::LazyLock::new(|| {
-                let text = ::unity2::scan::get_text();
+                let text = ::unity::scan::get_text();
                 ::lazysimd::get_offset_neon(&text, #attr).unwrap()
             });
 

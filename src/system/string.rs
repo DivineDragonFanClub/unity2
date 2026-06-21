@@ -30,7 +30,7 @@ impl IlType for Il2CppString {
     }
 }
 
-// Mirrors what `#[unity2::class]` would emit, needed because Il2CppString is declared by hand
+// Mirrors what `#[unity::class]` would emit, needed because Il2CppString is declared by hand
 pub trait IIl2CppString: crate::SystemObject {}
 
 impl IIl2CppString for Il2CppString {}
@@ -163,7 +163,7 @@ impl From<String> for Il2CppString {
     }
 }
 
-#[unity2::methods]
+#[unity::methods]
 impl Il2CppString {
     #[method(name = "StartsWith", args = 1)]
     fn starts_with_raw(self, value: Il2CppString) -> bool;

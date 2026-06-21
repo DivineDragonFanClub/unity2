@@ -2,9 +2,9 @@
 
 mod gen {
     #[allow(unused_imports)]
-    use unity2::prelude::*;
+    use unity::prelude::*;
 
-    #[unity2::class(namespace = "Test", name = "OffsetDummy")]
+    #[unity::class(namespace = "Test", name = "OffsetDummy")]
     pub struct OffsetDummy {
         #[offset(16)]
         #[rename(name = "m_Value")]

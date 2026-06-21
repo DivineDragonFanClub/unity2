@@ -1,15 +1,19 @@
 [package]
-name = "unity2"
+name = "unity-nx"
 version = "0.1.0"
 edition = "2021"
 license = "MPL-2.0"
-repository = "https://github.com/DivineDragonFanClub/unity2"
+repository = "https://github.com/DivineDragonFanClub/unity-nx"
+description = "IL2CPP interop modding runtime for Nintendo Switch"
+
+[lib]
+name = "unity"
 
 [dependencies]
 skyline = "0.6"
 lazysimd = "0.1"
 thiserror = "1"
-unity-macro = { path = "./unity-macro" }
+unity-nx-macro = { version = "0.1.0", path = "./unity-nx-macro" }
 
 [features]
 default = ["fe-engage"]

@@ -1,9 +1,10 @@
 [package]
-name = "unity-macro"
+name = "unity-nx-macro"
 version = "0.1.0"
 edition = "2024"
 license = "MPL-2.0"
-repository = "https://github.com/DivineDragonFanClub/unity2"
+repository = "https://github.com/DivineDragonFanClub/unity-nx"
+description = "Proc macros for the unity-nx crate"
 
 [lib]
 proc-macro = true

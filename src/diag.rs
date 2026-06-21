@@ -29,7 +29,7 @@ pub fn peek_method(
     }
 
     Ok(format!(
-        "[unity2::diag::peek_method] {ns}.{cls}::{m}({argc})\n  \
+        "[unity::diag::peek_method] {ns}.{cls}::{m}({argc})\n  \
          method_ptr = {ptr:p}\n  \
          offset from .text = 0x{off:x}\n  \
          first 4 instructions (LE) = [0x{a:08x}, 0x{b:08x}, 0x{c:08x}, 0x{d:08x}]\n  \
@@ -51,7 +51,7 @@ pub fn peek_method(
 
 pub fn peek_fields(namespace: &str, class_name: &str) -> Il2CppResult<String> {
     let class = Class::try_lookup(namespace, class_name)?.raw();
-    let mut out = format!("[unity2::diag::peek_fields] {}.{}\n", namespace, class_name);
+    let mut out = format!("[unity::diag::peek_fields] {}.{}\n", namespace, class_name);
     for c in class.get_class_hierarchy() {
         out.push_str(&format!(
             "  class `{}` declares {} field(s):\n",
@@ -77,13 +77,13 @@ pub fn peek_class_layout(namespace: &str, class_name: &str) -> Il2CppResult<Stri
     let raw: &[u8] = unsafe { core::slice::from_raw_parts(class_ptr, 0x200) };
 
     let mut out = format!(
-        "[unity2::diag::peek_class_layout] {}.{}\n  class ptr = {:p}\n",
+        "[unity::diag::peek_class_layout] {}.{}\n  class ptr = {:p}\n",
         namespace, class_name, class_ptr,
     );
 
     let hier = class.get_class_hierarchy();
     out.push_str(&format!(
-        "  unity2 reads: fields={:p} field_count={} methods={:p} method_count={} hierarchy_depth={} (ptr={:p})\n",
+        "  unity reads: fields={:p} field_count={} methods={:p} method_count={} hierarchy_depth={} (ptr={:p})\n",
         class.get_fields().as_ptr() as *const _,
         class.get_fields().len(),
         class.get_methods().as_ptr() as *const _,

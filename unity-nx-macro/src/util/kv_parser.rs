@@ -63,7 +63,7 @@ impl KvParser {
     }
 
     /// Parse a key/value list directly from the *arguments* of an attribute, e.g. the
-    /// `namespace = "App", name = "ProcInst"` part of `#[unity2::class(namespace = "App", name = "ProcInst")]`.
+    /// `namespace = "App", name = "ProcInst"` part of `#[unity::class(namespace = "App", name = "ProcInst")]`.
     ///
     /// Used for `#[proc_macro_attribute]`s where the args arrive as a `TokenStream` rather than
     /// a `venial::Attribute`.
