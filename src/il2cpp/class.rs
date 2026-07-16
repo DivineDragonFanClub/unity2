@@ -270,6 +270,9 @@ impl Il2CppClass {
     }
 
     pub fn get_nested_types(&self) -> &[&'static Il2CppClass] {
+        if self._1.nested_types.is_null() || self._2.nested_type_count == 0 {
+            return &[];
+        }
         unsafe {
             std::slice::from_raw_parts(self._1.nested_types, self._2.nested_type_count as _)
         }
